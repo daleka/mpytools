@@ -18,6 +18,10 @@
       {
         "command": "mpytools.connect",
         "title": "MPY: Підключитись та запустити REPL"
+      },
+      {
+        "command": "mpytools.compileAndMount",
+        "title": "MPY: Компіляція PY -> MPY та монтування"
       }
     ]
   },
