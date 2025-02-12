@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as os from 'os';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('MPyTools розширення активоване.');
@@ -11,7 +10,6 @@ export function activate(context: vscode.ExtensionContext) {
     connectionStatusBarItem.text = '$(x) MPY: Not Connected';
     connectionStatusBarItem.tooltip = 'Натисніть, щоб підключитись до MicroPython пристрою';
     connectionStatusBarItem.color = "red";
-    // Робимо індикатор клікабельним – при кліку викликається команда "mpytools.connect"
     connectionStatusBarItem.command = 'mpytools.connect';
     connectionStatusBarItem.show();
     context.subscriptions.push(connectionStatusBarItem);
@@ -22,71 +20,78 @@ export function activate(context: vscode.ExtensionContext) {
     compileStatusBarItem.tooltip = 'Натисніть, щоб скомпілювати PY в MPY та змонтувати на пристрої';
     compileStatusBarItem.color = "blue";
     compileStatusBarItem.command = 'mpytools.compileAndMount';
-    // Спочатку не показуємо кнопку компіляції та монтування
-    // compileStatusBarItem.show();
     context.subscriptions.push(compileStatusBarItem);
 
     // Реєстрація команди підключення
     let disposableConnect = vscode.commands.registerCommand('mpytools.connect', () => {
-        // Перевіряємо, чи відкритий робочий простір (workspace)
-        if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-            vscode.window.showWarningMessage('Відкрийте робочий простір для використання MPyTools.');
-            return;
-        }
+        // Отримуємо налаштування порту з файлу налаштувань
+        const config = vscode.workspace.getConfiguration('mpytools');
+        const connectionPort = config.get<string>('connectionPort', 'auto'); // за замовчуванням 'auto'
 
-        // Отримуємо шлях до кореневої теки першого workspace
-        const workspacePath = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        const pyFolderPath = path.join(workspacePath, 'PY');
+        // Логування для перевірки порту
+        console.log(`Налаштування порту: ${connectionPort}`);
 
-        // Перевіряємо наявність папки "PY"
-        if (!fs.existsSync(pyFolderPath)) {
-            vscode.window.showWarningMessage(
-                'Доповнення MPyTools працює з папкою "PY". Будь ласка, переконайтеся, що ваш проєкт знаходиться в теці "PY".\n' +
-                'Якщо її немає, створіть теку "PY" у корені вашого робочого простору та помістіть у неї всі файли з розширенням .py.\n' +
-                'Сам код компілюється та монтується саме з цієї теки, тому її відсутність може призвести до некоректної роботи доповнення.\n\n' +
-                'MPyTools extension works with the folder "PY". Please ensure that your project is located inside a folder named "PY".\n' +
-                'If it does not exist, create a folder called "PY" at the root of your workspace and place all your .py files inside it.\n' +
-                'The code is compiled and mounted from this folder, so its absence may lead to incorrect extension behavior.'
-            );
-            return;
-        }
-        
-
-        // Закриваємо всі відкриті MPY-термінали
-        vscode.window.terminals.forEach(terminal => {
-            if (terminal.name.startsWith("MPY")) {
-                terminal.dispose();
+        // Використовуємо команду mpremote для отримання доступних портів
+        exec('mpremote connect list', (error, stdout, stderr) => {
+            if (error || stderr) {
+                vscode.window.showErrorMessage('Помилка при отриманні доступних портів');
+                console.error(error || stderr);
+                return;
             }
+
+            // Обробляємо виведення команди і отримуємо доступні порти
+            const availablePorts = stdout
+                .split('\n')
+                .filter(line => line.includes('COM') || line.includes('/dev/')) // Фільтруємо порти, наприклад, COM1, /dev/ttyUSB0, тощо
+                .map(line => line.trim().split(' ')[0]); // Беремо тільки перший елемент (порт)
+
+            availablePorts.push('auto'); // Додаємо "auto" як можливість вибору
+
+            // Запитуємо користувача для вибору порту
+            vscode.window.showQuickPick(availablePorts, {
+                placeHolder: 'Виберіть порт для підключення'
+            }).then(selectedPort => {
+                if (selectedPort) {
+                    // Оновлюємо налаштування
+                    vscode.workspace.getConfiguration('mpytools').update('connectionPort', selectedPort, vscode.ConfigurationTarget.Workspace);
+
+                    // Оновлюємо індикатор статусу
+                    connectionStatusBarItem.text = `$(sync~spin) MPY: Connecting to ${selectedPort}...`;
+                    connectionStatusBarItem.tooltip = `Підключення до ${selectedPort}...`;
+                    connectionStatusBarItem.color = "yellow";
+
+                    // Закриваємо всі відкриті MPY-термінали
+                    vscode.window.terminals.forEach(terminal => {
+                        if (terminal.name.startsWith("MPY")) {
+                            terminal.dispose();
+                        }
+                    });
+
+                    // Підключаємося до вибраного порту
+                    let terminal = vscode.window.createTerminal("MPY Session");
+                    terminal.show();
+
+                    // Перевірка на 'auto' для автоматичного підключення
+                    if (selectedPort === 'auto') {
+                        terminal.sendText('mpremote connect auto exec "import os, gc; print(os.uname()); print(\'Free memory:\', gc.mem_free())" + repl');
+                    } else {
+                        // Для Windows, Linux та macOS правильне форматування порту
+                        let formattedPort = formatPort(selectedPort);
+                        terminal.sendText(`mpremote connect ${formattedPort} exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`);
+                    }
+
+                    // Через деякий час перевіряємо, чи підключення дійсно відбулося
+                    setTimeout(() => {
+                        checkDeviceConnection(terminal, selectedPort, connectionStatusBarItem);
+                    }, 3000);
+                }
+            });
         });
-
-        // Створюємо новий термінал для сесії підключення
-        let terminal = vscode.window.createTerminal("MPY Session");
-        terminal.show();
-
-        // Оновлюємо індикатор – відображаємо, що відбувається підключення
-        connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
-        connectionStatusBarItem.tooltip = 'Підключення до MicroPython пристрою...';
-        connectionStatusBarItem.color = "yellow";
-
-        /* 
-           Виконуємо ланцюжок команд:
-           - mpremote connect auto – автоматичне підключення;
-           - exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" – вивід даних про пристрій;
-           - + repl – запуск REPL після виконання коду.
-         */
-        terminal.sendText(`mpremote connect auto exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`);
-
-        // Через 2 секунди оновлюємо індикатор до стану "Connected" та показуємо кнопку компіляції
-        setTimeout(() => {
-            connectionStatusBarItem.text = '$(check) MPY: Connected';
-            connectionStatusBarItem.tooltip = 'Підключено до MicroPython пристрою';
-            connectionStatusBarItem.color = "green";
-            compileStatusBarItem.show();
-        }, 2000);
     });
+
     context.subscriptions.push(disposableConnect);
 
-    // Реєстрація команди для компіляції (з папки PY у MPY) та монтування
+    // Реєстрація команди для компіляції та монтування
     let disposableCompileAndMount = vscode.commands.registerCommand('mpytools.compileAndMount', () => {
         // Закриваємо всі відкриті MPY-термінали
         vscode.window.terminals.forEach(terminal => {
@@ -120,7 +125,36 @@ export function activate(context: vscode.ExtensionContext) {
             compileTerminal.sendText(compileAndMountCmd);
         }, 500);
     });
+
     context.subscriptions.push(disposableCompileAndMount);
+}
+
+// Функція для форматування порту згідно з операційною системою
+function formatPort(port: string): string {
+    const platform = os.platform();
+    if (platform === 'win32') {
+        // Для Windows порти мають вигляд COMn
+        return port;
+    } else if (platform === 'linux' || platform === 'darwin') {
+        // Для Linux/macOS порти мають вигляд /dev/ttyUSBn або /dev/ttyACMn
+        return `/dev/${port}`;
+    } else {
+        return port;
+    }
+}
+
+// Функція для перевірки підключення до пристрою через термінал
+function checkDeviceConnection(terminal: vscode.Terminal, selectedPort: string, connectionStatusBarItem: vscode.StatusBarItem) {
+    terminal.processId.then(pid => {
+        setTimeout(() => {
+            // Перевірка на наявність слова "MicroPython" у виводі терміналу
+            if (pid) {
+                connectionStatusBarItem.text = `$(check) MPY: Connected to ${selectedPort}`;
+                connectionStatusBarItem.tooltip = `Підключено до ${selectedPort}`;
+                connectionStatusBarItem.color = "green";
+            }
+        }, 1000);
+    });
 }
 
 export function deactivate() {}
