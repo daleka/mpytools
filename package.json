@@ -1,4 +1,3 @@
-
 {
   "name": "mpytools",
   "displayName": "MPyTools",
@@ -23,8 +22,29 @@
       {
         "command": "mpytools.compileAndMount",
         "title": "MPY: Компіляція PY -> MPY та монтування"
+      },
+      {
+        "command": "mpytools.showSettings",
+        "title": "MPyTools: Показати панель налаштувань"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mpytools",
+          "title": "MPyTools",
+          "icon": "resources/default.svg"
+        }
+      ]
+    },
+    "views": {
+      "mpytools": [
+        {
+          "id": "mpytoolsSettings",
+          "name": "Settings"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
