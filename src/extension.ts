@@ -10,7 +10,7 @@ let lastUsedPort: string = 'auto';
 export function activate(context: vscode.ExtensionContext) {
     console.log('MPyTools розширення активоване.');
 
-    // Статус-бар для підключення:
+    // Створюємо статус-бар для підключення
     let connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
     connectionStatusBarItem.text = '$(x) MPY: Not Connected';
     connectionStatusBarItem.tooltip = 'Натисніть, щоб підключитись до MicroPython пристрою';
@@ -19,7 +19,7 @@ export function activate(context: vscode.ExtensionContext) {
     connectionStatusBarItem.show();
     context.subscriptions.push(connectionStatusBarItem);
 
-    // Кнопка "Compile & Run":
+    // Створюємо кнопку "Compile & Run"
     let compileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
     compileStatusBarItem.text = '$(tools) MPY: Compile & Run';
     compileStatusBarItem.tooltip = 'Натисніть, щоб скомпілювати та запустити проект';
@@ -27,7 +27,7 @@ export function activate(context: vscode.ExtensionContext) {
     compileStatusBarItem.command = 'mpytools.compileAndRun';
     context.subscriptions.push(compileStatusBarItem);
 
-    // Команда підключення:
+    // Команда підключення
     let disposableConnect = vscode.commands.registerCommand('mpytools.connect', () => {
         exec('mpremote connect list', (error, stdout, stderr) => {
             if (error || stderr) {
@@ -35,47 +35,36 @@ export function activate(context: vscode.ExtensionContext) {
                 console.error(error || stderr);
                 return;
             }
-
             const availablePorts = stdout
                 .split('\n')
                 .filter((line) => line.includes('COM') || line.includes('/dev/'))
                 .map((line) => line.trim().split(' ')[0]);
-
             availablePorts.push('auto');
-
             vscode.window.showQuickPick(availablePorts, {
                 placeHolder: 'Виберіть порт для підключення (поточний: ' + lastUsedPort + ')'
             }).then((selectedPort) => {
                 if (!selectedPort) {
                     return;
                 }
-
                 lastUsedPort = selectedPort;
                 console.log('[MPyTools] Порт обрано: ' + lastUsedPort);
-
                 connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting to ' + selectedPort + '...';
                 connectionStatusBarItem.tooltip = 'Підключення до ' + selectedPort + '...';
                 connectionStatusBarItem.color = 'yellow';
 
-                // Закриваємо всі термінали, які починаються з "MPY"
                 vscode.window.terminals.forEach((terminal) => {
                     if (terminal.name.startsWith('MPY')) {
                         terminal.dispose();
                     }
                 });
-
                 let connectTerminal = vscode.window.createTerminal('MPY Session');
                 connectTerminal.show();
-
                 if (selectedPort === 'auto') {
                     connectTerminal.sendText('mpremote connect auto exec "import os, gc; print(os.uname()); print(\'Free memory:\', gc.mem_free())" + repl');
                 } else {
                     let formattedPort = formatPort(selectedPort);
-                    connectTerminal.sendText(
-                        'mpremote connect ' + formattedPort + ' exec "import os, gc; print(os.uname()); print(\'Free memory:\', gc.mem_free())" + repl'
-                    );
+                    connectTerminal.sendText('mpremote connect ' + formattedPort + ' exec "import os, gc; print(os.uname()); print(\'Free memory:\', gc.mem_free())" + repl');
                 }
-
                 let connectionVerified = false;
                 const timeout = setTimeout(() => {
                     if (!connectionVerified) {
@@ -84,7 +73,6 @@ export function activate(context: vscode.ExtensionContext) {
                         connectionStatusBarItem.color = 'red';
                     }
                 }, 10000);
-
                 setTimeout(() => {
                     verifyDeviceConnection(selectedPort, (success) => {
                         if (success) {
@@ -102,14 +90,13 @@ export function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(disposableConnect);
 
-    // Метод компіляції та запуску:
+    // Метод компіляції та запуску
     let disposableCompileAndRun = vscode.commands.registerCommand('mpytools.compileAndRun', async () => {
         let workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             vscode.window.showErrorMessage('Не знайдено відкритий Workspace. Відкрийте папку проекту у VS Code.');
             return;
         }
-
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
         const srcPath = path.join(workspaceRoot, 'src');
         const mpyPath = path.join(workspaceRoot, 'mpy');
@@ -126,6 +113,7 @@ export function activate(context: vscode.ExtensionContext) {
         compileTerminal.show();
 
         compileTerminal.sendText(`echo '==== MPyTools: Початок компіляції та завантаження ===='`);
+
         const usedPort = lastUsedPort;
         compileTerminal.sendText(`echo '[MPyTools] Використовується порт: ${usedPort}'`);
 
@@ -137,10 +125,16 @@ export function activate(context: vscode.ExtensionContext) {
         let pyFiles = findPyFiles(srcPath, []);
         compileTerminal.sendText(`echo 'Знайдено .py файлів: ${pyFiles.length}'`);
 
+        // Починаємо анімацію кнопки: змінюємо колір на червоний та показуємо 0%
+        compileStatusBarItem.color = 'red';
+        compileStatusBarItem.text = '$(tools) MPY: Compile & Run [0%]';
+
         let compiledCount = 0;
         let newlyCompiledMpyPaths: string[] = [];
 
-        for (const pyFile of pyFiles) {
+        // Частина компіляції (50% загального прогресу)
+        for (let i = 0; i < pyFiles.length; i++) {
+            const pyFile = pyFiles[i];
             if (needsRecompile(pyFile, srcPath, mpyPath)) {
                 compileTerminal.sendText(`echo 'Компілємо: ${pyFile}'`);
                 try {
@@ -153,17 +147,21 @@ export function activate(context: vscode.ExtensionContext) {
             } else {
                 compileTerminal.sendText(`echo 'Пропускаємо: ${pyFile} (не змінювався)'`);
             }
+            // Оновлюємо прогрес компіляції (до 50%)
+            let progressPercent = Math.floor(((i + 1) / pyFiles.length) * 50);
+            compileStatusBarItem.text = '$(tools) MPY: Compile & Run [' + progressPercent + '%]';
         }
         compileTerminal.sendText(`echo '>>> Компільовано: ${compiledCount} (із ${pyFiles.length})'`);
 
+        // Частина копіювання (інші 50% прогресу)
         let copiedCount = 0;
         if (newlyCompiledMpyPaths.length === 0) {
             compileTerminal.sendText(`echo 'Немає нових .mpy для копіювання.'`);
         } else {
             compileTerminal.sendText(`echo 'Копіюємо ${newlyCompiledMpyPaths.length} .mpy на пристрій...'`);
         }
-
-        for (const localMpy of newlyCompiledMpyPaths) {
+        for (let j = 0; j < newlyCompiledMpyPaths.length; j++) {
+            const localMpy = newlyCompiledMpyPaths[j];
             let relativeMpy = path.relative(mpyPath, localMpy);
             compileTerminal.sendText(`echo 'Копіюємо: ${relativeMpy}'`);
             try {
@@ -172,6 +170,9 @@ export function activate(context: vscode.ExtensionContext) {
             } catch (err: any) {
                 compileTerminal.sendText(`echo 'Помилка копіювання: ${err}'`);
             }
+            // Оновлюємо прогрес копіювання (від 50% до 100%)
+            let copyProgress = Math.floor(((j + 1) / newlyCompiledMpyPaths.length) * 50);
+            compileStatusBarItem.text = '$(tools) MPY: Compile & Run [' + (50 + copyProgress) + '%]';
         }
         compileTerminal.sendText(`echo 'Скопійовано .mpy: ${copiedCount}'`);
 
@@ -186,14 +187,18 @@ export function activate(context: vscode.ExtensionContext) {
         openTerminalAndRunMain((usedPort === 'auto') ? 'auto' : formatPort(usedPort), debugTerminal);
 
         compileTerminal.sendText(`echo '==== Завершено. ===='`);
+
+        // Після завершення повертаємо кнопку в нормальний стан
+        compileStatusBarItem.text = '$(tools) MPY: Compile & Run';
+        compileStatusBarItem.color = 'lightblue';
     });
     context.subscriptions.push(disposableCompileAndRun);
 }
 
+// Функція перевірки, чи треба перекомпілювати (.mpy не існує або .py новіший)
 function needsRecompile(pyFilePath: string, srcPath: string, mpyPath: string): boolean {
     const relative = path.relative(srcPath, pyFilePath);
     const outPath = path.join(mpyPath, relative.replace(/\.py$/, '.mpy'));
-
     if (!fs.existsSync(outPath)) {
         return true;
     }
@@ -202,6 +207,7 @@ function needsRecompile(pyFilePath: string, srcPath: string, mpyPath: string): b
     return (pyStat.mtime > mpyStat.mtime);
 }
 
+// Функція компіляції .py у .mpy з виводом команд у термінал
 async function compilePyFile(
     pyFilePath: string,
     srcPath: string,
@@ -212,12 +218,9 @@ async function compilePyFile(
         const relative = path.relative(srcPath, pyFilePath);
         const outPath = path.join(mpyPath, relative.replace(/\.py$/, '.mpy'));
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
-
         const mpyCrossPath = '"C:\\Program Files\\Python313\\Lib\\site-packages\\mpy_cross\\mpy-cross.exe"';
         const cmd = `${mpyCrossPath} -O3 "${pyFilePath}" -o "${outPath}"`;
-
         terminal.sendText(`echo '[mpy-cross cmd] ${cmd}'`);
-
         exec(cmd, (error, stdout, stderr) => {
             if (stdout && stdout.trim()) {
                 terminal.sendText(`echo '[mpy-cross stdout] ${stdout.trim()}'`);
@@ -234,6 +237,7 @@ async function compilePyFile(
     });
 }
 
+// Функція копіювання .mpy файлу на пристрій з виводом у термінал
 async function copySingleFileToDevice(
     localMpy: string,
     relativeMpy: string,
@@ -242,7 +246,6 @@ async function copySingleFileToDevice(
 ) {
     const devicePath = ':' + relativeMpy.replace(/\\/g, '/');
     await ensureDeviceDirectories(port, path.dirname(devicePath).replace(/^:/, ''), terminal);
-
     return new Promise<void>((resolve, reject) => {
         let cmd = '';
         if (port === 'auto') {
@@ -250,9 +253,7 @@ async function copySingleFileToDevice(
         } else {
             cmd = `mpremote connect ${port} fs cp "${localMpy}" "${devicePath}"`;
         }
-
         terminal.sendText(`echo '[mpremote cp] ${cmd}'`);
-
         exec(cmd, (error, stdout, stderr) => {
             if (stdout && stdout.trim()) {
                 terminal.sendText(`echo '[cp stdout] ${stdout.trim()}'`);
@@ -269,6 +270,7 @@ async function copySingleFileToDevice(
     });
 }
 
+// Функція створення потрібних директорій на пристрої з виводом у термінал
 async function ensureDeviceDirectories(
     port: string,
     deviceDir: string,
@@ -278,21 +280,18 @@ async function ensureDeviceDirectories(
         return;
     }
     const dirs = deviceDir.split('/').filter((d) => d.trim() !== '');
-
     let currentPath = '';
     for (const dir of dirs) {
         if (!dir) {
             continue;
         }
         currentPath = currentPath ? currentPath + '/' + dir : dir;
-
         let mkdirCmd = '';
         if (port === 'auto') {
             mkdirCmd = `mpremote connect auto fs mkdir ":${currentPath}"`;
         } else {
             mkdirCmd = `mpremote connect ${port} fs mkdir ":${currentPath}"`;
         }
-
         terminal.sendText(`echo '[mkdir] ${mkdirCmd}'`);
         try {
             await execPromise(mkdirCmd);
@@ -305,6 +304,7 @@ async function ensureDeviceDirectories(
     }
 }
 
+// Функція запуску терміналу MPY Debugging з import main і main.run()
 function openTerminalAndRunMain(port: string, debugTerminal: vscode.Terminal) {
     let connectCmd = '';
     if (port === 'auto') {
@@ -312,14 +312,13 @@ function openTerminalAndRunMain(port: string, debugTerminal: vscode.Terminal) {
     } else {
         connectCmd = `mpremote connect ${port} exec "import main" + repl`;
     }
-
     debugTerminal.sendText(connectCmd);
-
     setTimeout(() => {
         debugTerminal.sendText('main.run()');
     }, 1000);
 }
 
+// Обгортка exec(...) в Promise
 function execPromise(command: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
         exec(command, (error, stdout, stderr) => {
@@ -336,6 +335,7 @@ function execPromise(command: string): Promise<string> {
     });
 }
 
+// Форматує порт залежно від платформи
 function formatPort(port: string): string {
     const platform = os.platform();
     if (platform === 'win32') {
@@ -346,6 +346,7 @@ function formatPort(port: string): string {
     return port;
 }
 
+// Перевірка підключення через mpremote exec
 function verifyDeviceConnection(selectedPort: string, callback: (success: boolean) => void) {
     let command = '';
     if (selectedPort === 'auto') {
@@ -354,7 +355,6 @@ function verifyDeviceConnection(selectedPort: string, callback: (success: boolea
         let formattedPort = formatPort(selectedPort);
         command = `mpremote connect ${formattedPort} exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())"`;
     }
-
     exec(command, (error, stdout, stderr) => {
         if (error || stderr) {
             const errText = error ? error.message : stderr;
@@ -374,9 +374,9 @@ function verifyDeviceConnection(selectedPort: string, callback: (success: boolea
     });
 }
 
+// Рекурсивний пошук .py файлів
 function findPyFiles(rootDir: string, ignoreList: string[] = []): string[] {
     let results: string[] = [];
-
     function recurse(dir: string) {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (let entry of entries) {
@@ -390,7 +390,6 @@ function findPyFiles(rootDir: string, ignoreList: string[] = []): string[] {
             }
         }
     }
-
     if (fs.existsSync(rootDir)) {
         recurse(rootDir);
     }
