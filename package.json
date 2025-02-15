@@ -1,8 +1,9 @@
 {
   "name": "mpytools",
   "displayName": "MPyTools",
-  "description": "MPyTools – an extension for working with MicroPython in VS Code.",
-  "version": "0.0.1-alpha",
+  "description": "MPyTools – просте та гнучке розширення для роботи з MicroPython у VS Code. | MPyTools – a simple and flexible extension for working with MicroPython in VS Code.",
+  "version": "0.0.9",
+  "preview": true,
   "publisher": "daleka",
   "engines": {
     "vscode": "^1.97.0"
@@ -10,7 +11,7 @@
   "categories": [
     "Programming Languages",
     "Debuggers",
-    "Development"
+    "Other"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -20,11 +21,15 @@
     "commands": [
       {
         "command": "mpytools.connect",
-        "title": "MPY: Підключитись та запустити REPL"
+        "title": "MPY: Підключитись та запустити REPL | MPY: Connect and start REPL"
       },
       {
         "command": "mpytools.compileAndMount",
-        "title": "MPY: Компіляція PY -> MPY та монтування"
+        "title": "MPY: Компіляція PY → MPY та монтування | MPY: Compile PY → MPY and mount"
+      },
+      {
+        "command": "mpytools.installDependencies",
+        "title": "MPY: Встановити залежності | MPY: Install Dependencies"
       }
     ]
   },
@@ -46,5 +51,6 @@
     "typescript": "^5.7.3",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.1"
-  }
+  },
+  "icon": "icon.png"
 }
