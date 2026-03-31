@@ -1,71 +1,88 @@
-# mpytools README
+MPyTools is a Visual Studio Code extension that simplifies working with MicroPython using mpremote. It automates compilation, uploading, and execution of code on a     microcontroller.  
+    
+    
 
-This is the README for your extension "mpytools". After writing up a brief description, we recommend including the following sections.
+Dependencies   
+The extension requires the following dependencies:    
+✅ mpremote – for interacting with MicroPython   
+✅ mpy-cross – for compiling .py → .mpy   
+✅ zip – for project backup   
+✅ micropython-stubs – for autocompletion and type checking in VS Code   
+   
+    
+   
+Dependencies are automatically installed when running the "MPY: Install Dependencies" command for the first time.   
+   
+Features   
+🔹 Automatic compilation & upload – Only modified .py files are compiled into .mpy, and only updated files are uploaded to the device.   
+🔹 Run code without copying – Execute .py files directly from the host machine.   
+🔹 Seamless integration with VS Code – Manage your microcontroller using status bar buttons.   
+🔹 Fast project backup – Easily archive your project into a .zip file.   
+🔹 Board support – Tested on STM32, expected to work with ESP32, RP2040 (but not verified yet).   
+🔹 Automatic installation of MicroPython Stubs – Adds autocompletion and type checking in VS Code (micropython-stubs).    
+   
+  
+    
+Future Plans    
+🚀 Support for ESP32 and other MicroPython boards   
+🚀 Mounting local folders (paused due to mpremote limitations with .mpy files)   
+🚀 Expanding support for mpremote commands   
+    
+         
+           
+   
+Who is this extension for?    
+✔ Developers working with MicroPython    
+✔ Beginners looking for a quick setup   
+✔ Users of STM32, ESP32, RP2040, and similar boards    
+     
+I’d appreciate any feedback or suggestions!    
+   
 
-## Features
+Urkaine   
+-------
+      
+MPyTools – це розширення для Visual Studio Code, яке спрощує роботу з MicroPython за допомогою mpremote. Воно автоматизує компіляцію, завантаження та виконання коду на          мікроконтролері.       
+    
+    
+    
+    
+Залежності    
+Розширення потребує встановлених:    
+✅ mpremote – для взаємодії з MicroPython     
+✅ mpy-cross – для компіляції .py → .mpy      
+✅ zip – для резервного копіювання      
+✅ micropython-stubs – для автодоповнення та перевірки типів у VS Code     
+    
+    
+          
+Залежності встановлюються автоматично під час першого запуску команди "MPY: Встановити залежності".    
+     
+             
+Можливості     
+🔹 Автоматична компіляція та завантаження – лише змінені .py файли компілюються в .mpy, і лише оновлені файли завантажуються на пристрій.   
+🔹 Запуск коду без копіювання – можна виконувати .py файли безпосередньо з ПК.   
+🔹 Зручна інтеграція у VS Code – керування мікроконтролером через кнопки у статус-барі.   
+🔹 Резервне копіювання – можливість швидко архівувати проєкт у .zip файл.   
+🔹 Підтримка плат – протестовано на STM32, очікується сумісність з ESP32, RP2040 (але поки що не перевірено).   
+🔹 Автоматичне встановлення MicroPython Stubs – додає автодоповнення та перевірку типів у VS Code (micropython-stubs).   
+      
+    
+    
+Плани на майбутнє    
+🚀 Підтримка ESP32 та інших плат під MicroPython    
+🚀 Монтування локальних папок (відкладено через mpremote і його обмеження роботи з .mpy файлами)    
+🚀 Розширення команд для mpremote    
+    
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
-
-## Requirements
-
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
-
-## Extension Settings
-
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+               
+Для кого це розширення?   
+✔ Розробників, які працюють з MicroPython   
+✔ Початківців, які хочуть швидко налаштувати середовище   
+✔ Користувачів STM32, ESP32, RP2040 та подібних плат   
+    
+        
+            
+Буду радий будь-яким відгукам і пропозиціям!       
+       
+            

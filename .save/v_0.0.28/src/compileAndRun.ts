@@ -1,0 +1,326 @@
+//compileAndRun.ts 
+
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { exec } from 'child_process';
+
+
+/**
+ * Функція реєструє кнопку та команду "mpytools.compileAndRun".
+ * Уся логіка (запит оптимізації, компіляція, копіювання, запуск main) перенесена сюди з extension.ts.
+ *
+ * @param context               - контекст розширення
+ * @param outputChannel         - канал виводу
+ * @param execPromise           - функція для виконання shell-команд
+ * @param getLastUsedPort       - функція-гетер для lastUsedPort
+ * @param getSelectedMethod     - функція-гетер для selectedCompilationMethod
+ * @param setSelectedMethod     - функція-сетер для export function registerCompileAndRunCommand(
+ * @param needsRecompile        - функція перевірки потреби перекомпіляції
+ * @param compilePyFile         - функція компіляції одного .py у .mpy
+ * @param findPyFiles           - функція пошуку .py в папці src
+ * @param openTerminalAndRunMain - функція запуску main (mpremote connect ... + repl)
+ * @param formatPort            - функція форматування порту
+ * @param getMicropythonVersion - функція-гетер для micropythonVersion
+ * @param getMicropythonBytecodeVersion - функція-гетер для micropythonBytecodeVersion
+ * @param getMicropythonArchitecture - функція-гетер для micropythonArchitecture
+ * @param getMicropythonMsmallIntBits - функція-гетер для micropythonMsmallIntBits
+ *
+ * @returns {vscode.StatusBarItem} Статус-бар елемент.
+ */
+export function registerCompileAndRunCommand(
+  context: vscode.ExtensionContext,
+  outputChannel: vscode.OutputChannel,
+  execPromise: (cmd: string) => Promise<string>,
+  getLastUsedPort: () => string,
+  getSelectedMethod: () => string | undefined,
+  setSelectedMethod: (val: string | undefined) => void,
+  needsRecompile: (pyFilePath: string, srcPath: string, mpyPath: string) => boolean,
+  compilePyFile: (
+    pyFilePath: string,
+    srcPath: string,
+    mpyPath: string
+  ) => Promise<string>,
+  findPyFiles: (rootDir: string, ignoreList?: string[]) => string[],
+  openTerminalAndRunMain: (port: string, debugTerminal: vscode.Terminal) => Promise<void>,
+  formatPort: (port: string) => string,
+  getMicropythonVersion: () => string | undefined,
+  getMicropythonBytecodeVersion: () => number | undefined,
+  getMicropythonArchitecture: () => string | undefined,
+  getMicropythonMsmallIntBits: () => number | undefined
+): vscode.StatusBarItem {
+  // 1) Створюємо кнопку для "Compile & Run"
+  let compileStatusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    -1
+  );
+  compileStatusBarItem.text = '$(rocket) Compile & Run';
+  compileStatusBarItem.tooltip = 'Click to compile and run the project';
+  compileStatusBarItem.color = '#00BFFF';
+  compileStatusBarItem.command = 'mpytools.compileAndRun';
+  compileStatusBarItem.hide();
+  context.subscriptions.push(compileStatusBarItem);
+
+  // 2) Реєструємо команду "mpytools.compileAndRun"
+  let disposableCompileAndRun = vscode.commands.registerCommand('mpytools.compileAndRun', async () => {
+    // 2.1 Перевірка незбережених файлів перед початком процесу
+    const unsavedDocs = vscode.workspace.textDocuments.filter(doc => doc.isDirty);
+    if (unsavedDocs.length > 0) {
+      const choice = await vscode.window.showWarningMessage(
+        'You have unsaved files. Do you want to save them before compiling? / У вас є незбережені файли. Бажаєте зберегти їх перед компіляцією?',
+        'Yes / Так',
+        'No / Ні'
+      );
+      if (choice === 'Yes / Так') {
+        await vscode.workspace.saveAll();
+      }
+    }
+
+    // 2.2 Перевірка відкритого Workspace
+    let workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      vscode.window.showErrorMessage('No workspace folder opened.');
+      return;
+    }
+
+    // 2.3 Запит методу оптимізації/компіляції
+    let currentMethod = getSelectedMethod();
+    if (!currentMethod) {
+      const compilationOptions: vscode.QuickPickItem[] = [
+        { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
+        { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
+        { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
+        { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
+        { label: 'No Compilation', description: 'Upload source files directly without compiling' }
+      ];
+      const result = await vscode.window.showQuickPick(compilationOptions, {
+        placeHolder: 'Choose mpy-cross optimization level or select "No Compilation"',
+        canPickMany: false
+      });
+      if (!result) {
+        vscode.window.showWarningMessage('Compilation canceled: no method selected.');
+        return;
+      }
+      if (result.label === 'No Compilation') {
+        setSelectedMethod('none');
+        currentMethod = 'none';
+      } else {
+        const match = result.label.match(/Level (\d+)/);
+        const chosen = match ? match[1] : '0';
+        setSelectedMethod(chosen);
+        currentMethod = chosen;
+      }
+    }
+
+    // 2.4 Підготовчі змінні
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    const srcPath = path.join(workspaceRoot, 'src');
+    const mpyPath = path.join(workspaceRoot, 'mpy');
+
+    // Закриваємо термінали MPY
+    vscode.window.terminals.forEach((t) => {
+      if (t.name.startsWith('MPY')) {
+        t.dispose();
+      }
+    });
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    outputChannel.show(false);
+    outputChannel.appendLine("🔹 Starting Compile & Run...");
+    outputChannel.appendLine(`   - Selected method: ${currentMethod === 'none' ? 'No Compilation' : 'Optimization O' + currentMethod}`);
+
+    // 2.5 Основний процес з індикацією Progress
+    vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: 'MPyTools: Compile & Run',
+      cancellable: false
+    }, async (progress) => {
+      let compiledCount = 0;
+      let copiedNonPyCount = 0;
+
+      if (currentMethod !== 'none') {
+        // --- Компіляційний режим (існуюча логіка) ---
+        progress.report({ message: 'Preparing compilation...' });
+        outputChannel.appendLine("🔹 Preparing compilation...");
+        if (!fs.existsSync(mpyPath)) {
+          fs.mkdirSync(mpyPath);
+          vscode.window.showInformationMessage(`Created directory: ${mpyPath}`);
+          outputChannel.appendLine(`   ✅ Created directory: ${mpyPath}`);
+        }
+
+        // Знаходимо всі файли у директорії src (включаючи підпапки)
+        let allFiles: string[] = [];
+        (function recurse(dir: string) {
+          if (!fs.existsSync(dir)) { return; }
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (let entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              recurse(fullPath);
+            } else {
+              allFiles.push(fullPath);
+            }
+          }
+        })(srcPath);
+        outputChannel.appendLine(`   🔹 Found ${allFiles.length} total files in "src".`);
+
+        // Проходимось по кожному файлу: компіляція для .py, копіювання для інших
+        for (let i = 0; i < allFiles.length; i++) {
+          const filePath = allFiles[i];
+          const shortName = path.relative(workspaceRoot, filePath);
+          const extName = path.extname(filePath).toLowerCase();
+          const relativeFromSrc = path.relative(srcPath, filePath);
+          const outPath = path.join(mpyPath, relativeFromSrc);
+
+          if (extName === '.py') {
+            if (needsRecompile(filePath, srcPath, mpyPath)) {
+              progress.report({ message: `Compiling: ${shortName}` });
+              outputChannel.appendLine(`   🔹 Compiling: ${shortName}`);
+              try {
+                await compilePyFile(filePath, srcPath, mpyPath);
+                compiledCount++;
+                outputChannel.appendLine(`      ✅ OK: ${shortName}`);
+              } catch (err: any) {
+                vscode.window.showWarningMessage(`Compilation error: ${shortName}\n${err}`);
+                outputChannel.appendLine(`      ❌ Compilation error: ${shortName} -> ${err.message}`);
+              }
+              outputChannel.appendLine("");
+            } else {
+              outputChannel.appendLine(`   🔹 Skipped (unchanged .py): ${shortName}`);
+              outputChannel.appendLine("");
+            }
+          } else {
+            // Копіюємо файли, що не мають розширення .py
+            if (!fs.existsSync(outPath)) {
+              copyWithMkDir(filePath, outPath);
+              copiedNonPyCount++;
+              outputChannel.appendLine(`   🔹 Copied (new): ${shortName}`);
+            } else {
+              if (!areFilesIdentical(filePath, outPath)) {
+                copyWithMkDir(filePath, outPath);
+                copiedNonPyCount++;
+                outputChannel.appendLine(`   🔹 Replaced (updated): ${shortName}`);
+              } else {
+                outputChannel.appendLine(`   🔹 Skipped (identical ${extName}): ${shortName}`);
+              }
+            }
+            outputChannel.appendLine("");
+          }
+        }
+        outputChannel.appendLine(`   ✅ Compiled ${compiledCount} .py files; Copied ${copiedNonPyCount} non-py files.`);
+      } else {
+        // --- Режим "No Compilation": просто завантажуємо вміст src ---
+        progress.report({ message: 'Skipping compilation, uploading source files...' });
+        outputChannel.appendLine("🔹 Skipping compilation. Uploading source files directly from 'src'...");
+      }
+
+      // 2.6 Копіюємо файли на пристрій (в залежності від режиму беремо папку mpy або src)
+      const usedPort = getLastUsedPort();
+      const finalPort = (usedPort === 'auto') ? 'auto' : formatPort(usedPort);
+      let copyPath: string;
+      if (currentMethod !== 'none') {
+        copyPath = os.platform() === 'win32' ? `${mpyPath}\\.` : `${mpyPath}/.`;
+      } else {
+        copyPath = os.platform() === 'win32' ? `${srcPath}\\.` : `${srcPath}/.`;
+      }
+      const copyCmd = (finalPort === 'auto')
+        ? `mpremote connect auto fs cp -r "${copyPath}" ":/"`
+        : `mpremote connect ${finalPort} fs cp -r "${copyPath}" ":/"`;
+
+      outputChannel.appendLine("🔹 Copying files to device...");
+      try {
+        await execPromise(copyCmd);
+        vscode.window.showInformationMessage('Copy complete.');
+        outputChannel.appendLine("   ✅ Copy complete.");
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Error copying files: ${err}`);
+        outputChannel.appendLine(`   ❌ Error copying files: ${err.message}`);
+        compileStatusBarItem.text = '$(tools) MPY: Compile & Run';
+        compileStatusBarItem.color = 'lightblue';
+        return;
+      }
+
+      // 2.7 (Опційно) Оцінимо розмір скопійованої теки
+      const folderSizeKB = getFolderSizeKB(currentMethod !== 'none' ? mpyPath : srcPath);
+      outputChannel.appendLine(`🔹 Total size of uploaded folder: ${folderSizeKB.toFixed(2)} KB`);
+      outputChannel.appendLine("🔹 Launching main...");
+
+      // Невелика затримка для перегляду логів
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Повертаємо кнопку до нормального стану
+      compileStatusBarItem.text = '$(tools) MPY: Compile & Run';
+      compileStatusBarItem.color = 'lightblue';
+
+      // 2.8 Запускаємо main
+      let debugTerminal = vscode.window.createTerminal('MPY Debugging');
+      debugTerminal.show();
+
+      if (currentMethod !== 'none') {
+        // Для режиму компіляції: підключаємося і відправляємо main.run()
+        await openTerminalAndRunMain(finalPort, debugTerminal);
+      } else {
+        // Для режиму "No Compilation": просто підключаємося без відправки main.run()
+        debugTerminal.sendText(`mpremote connect ${finalPort} exec "import main" + repl`);
+      }
+
+      compileStatusBarItem.text = '$(tools) MPY: Compile & Run';
+      compileStatusBarItem.color = 'lightblue';
+    });
+  });
+
+  context.subscriptions.push(disposableCompileAndRun);
+  return compileStatusBarItem;
+}
+
+
+/**
+ * Копіює файл із `srcFile` у `destFile`, створюючи проміжні директорії за потреби.
+ */
+function copyWithMkDir(srcFile: string, destFile: string) {
+  fs.mkdirSync(path.dirname(destFile), { recursive: true });
+  fs.copyFileSync(srcFile, destFile);
+}
+
+/**
+ * Перевіряє, чи два файли ідентичні (швидка перевірка розміру + детальне порівняння, якщо треба).
+ */
+function areFilesIdentical(fileA: string, fileB: string): boolean {
+  try {
+    const statA = fs.statSync(fileA);
+    const statB = fs.statSync(fileB);
+    if (statA.size !== statB.size) {
+      return false; // різні розміри => точно різні
+    }
+    const bufA = fs.readFileSync(fileA);
+    const bufB = fs.readFileSync(fileB);
+    return bufA.equals(bufB);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Підраховує розмір тек у KB (рекурсивно).
+ */
+function getFolderSizeKB(dirPath: string): number {
+  let totalSize = 0;
+  function recurse(folder: string) {
+    if (!fs.existsSync(folder)) {
+      return;
+    }
+    const files = fs.readdirSync(folder);
+    for (const file of files) {
+      const fullPath = path.join(folder, file);
+      const stats = fs.statSync(fullPath);
+      if (stats.isDirectory()) {
+        recurse(fullPath);
+      } else {
+        totalSize += stats.size;
+      }
+    }
+  }
+  recurse(dirPath);
+  return totalSize / 1024;
+}

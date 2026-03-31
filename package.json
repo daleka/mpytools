@@ -1,12 +1,16 @@
 {
   "name": "mpytools",
   "displayName": "MPyTools",
-  "description": "MPyTools – an extension for working with MicroPython in VS Code.",
-  "version": "0.0.1",
+  "description": "MPyTools – просте та гнучке розширення для роботи з MicroPython у VS Code. | MPyTools – a simple and flexible extension for working with MicroPython in VS Code.",
+  "version": "0.2.3",
+  "preview": true,
+  "publisher": "daleka",
   "engines": {
     "vscode": "^1.97.0"
   },
   "categories": [
+    "Programming Languages",
+    "Debuggers",
     "Other"
   ],
   "activationEvents": [
@@ -17,31 +21,160 @@
     "commands": [
       {
         "command": "mpytools.connect",
-        "title": "MPY: Підключитись та запустити REPL"
+        "title": "MPY: Connect and start REPL / Підключитись та запустити REPL"
       },
       {
         "command": "mpytools.compileAndMount",
+<<<<<<< HEAD
         "title": "MPY: Компіляція PY -> MPY та монтування"
       },
       {
         "command": "mpytools.showSettings",
         "title": "MPyTools: Показати панель налаштувань"
+=======
+        "title": "Compile PY → MPY and mount / Компіляція PY → MPY та монтування"
+      },
+      {
+        "command": "mpytools.installDependencies",
+        "title": "Install Dependencies / Встановити залежності"
+      },
+      {
+        "command": "mpytools.openMicroPythonProject",
+        "title": "📂Open Project"
+      },
+      {
+        "command": "mpytools.openInExplorer",
+        "title": "🗃️Explorer"
+      },
+      {
+        "command": "mpytools.saveAllDirty",
+        "title": "💾Save All"
+      },
+      {
+        "command": "mpytoolsFileExplorer.refreshFolder",
+        "title": "Refresh folder / Оновити папку"
+      },
+      {
+        "command": "mpytoolsFileExplorer.refreshDevice",
+        "title": "♻️Refresh device / Оновити пристрій"
+      },
+      {
+        "command": "mpytoolsFileExplorer.createDeviceFile",
+        "title": "Create File / Створити файл"
+      },
+      {
+        "command": "mpytoolsFileExplorer.createDeviceFolder",
+        "title": "Create Folder / Створити папку"
+      },
+      {
+        "command": "mpytoolsFileExplorer.deleteDeviceFolder",
+        "title": "Delete Device Folder / Видалити папку"
+      },
+      {
+        "command": "mpytoolsFileExplorer.renameDeviceFile",
+        "title": "Rename Device File / Перейменувати файл"
+      },
+      {
+        "command": "mpytoolsFileExplorer.deleteDeviceFile",
+        "title": "Delete Device File / Видалити файл"
+      },
+      {
+        "command": "mpytoolsFileExplorer.sendDeviceFileToLocal",
+        "title": "Send Device File to Local / Відправити файл в локальний проєкт"
+      },
+      {
+        "command": "mpytoolsFileExplorer.measureDeviceSpace",
+        "title": "🔢Measure Space / Заміряти пам’ять"
+      },
+      {
+        "command": "mpytoolsFileExplorer.clearDevice",
+        "title": "🧹Clear Device / Очистити пристрій"
+>>>>>>> rollback-0.4-new
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
+<<<<<<< HEAD
           "id": "mpytools",
           "title": "MPyTools",
           "icon": "resources/default.svg"
+=======
+          "id": "mpytoolsFileManagerContainer",
+          "title": "MPyTools",
+          "icon": "icon2.svg"
+>>>>>>> rollback-0.4-new
         }
       ]
     },
     "views": {
+<<<<<<< HEAD
       "mpytools": [
         {
           "id": "mpytoolsSettings",
           "name": "Settings"
+=======
+      "mpytoolsFileManagerContainer": [
+        {
+          "id": "mpytoolsFileExplorer",
+          "name": "Explorer"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+      ],
+      "view/item/context": [
+        {
+          "command": "mpytoolsFileExplorer.refreshFolder",
+          "when": "viewItem == device-folder",
+          "group": "navigation"
+        },
+        {
+          "command": "mpytoolsFileExplorer.refreshDevice",
+          "when": "viewItem == device-root",
+          "group": "navigation"
+        },
+        {
+          "command": "mpytoolsFileExplorer.createDeviceFile",
+          "when": "viewItem == device-folder",
+          "group": "2_files"
+        },
+        {
+          "command": "mpytoolsFileExplorer.createDeviceFolder",
+          "when": "viewItem == device-folder",
+          "group": "3_folders"
+        },
+        {
+          "command": "mpytoolsFileExplorer.deleteDeviceFolder",
+          "when": "viewItem == device-folder",
+          "group": "5_delete"
+        },
+        {
+          "command": "mpytoolsFileExplorer.renameDeviceFile",
+          "when": "viewItem == device-file",
+          "group": "3_rename"
+        },
+        {
+          "command": "mpytoolsFileExplorer.deleteDeviceFile",
+          "when": "viewItem == device-file",
+          "group": "4_delete"
+        },
+        {
+          "command": "mpytoolsFileExplorer.sendDeviceFileToLocal",
+          "when": "viewItem == device-file",
+          "group": "5_send"
+        },
+        {
+          "command": "mpytoolsFileExplorer.measureDeviceSpace",
+          "when": "viewItem == device-root",
+          "group": "device_actions"
+        },
+        {
+          "command": "mpytoolsFileExplorer.clearDevice",
+          "when": "viewItem == device-root",
+          "group": "device_actions"
+>>>>>>> rollback-0.4-new
         }
       ]
     }
@@ -64,5 +197,21 @@
     "typescript": "^5.7.3",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.4.1"
-  }
+  },
+  "icon": "icon.png",
+  "keywords": [
+    "MicroPython",
+    "mpremote",
+    "mpy",
+    "mpy-cross",
+    "ESP32",
+    "RP2040",
+    "STM32",
+    "Pico",
+    "PyBoard",
+    "Python",
+    "Embedded",
+    "IoT",
+    "VSCode"
+  ]
 }
