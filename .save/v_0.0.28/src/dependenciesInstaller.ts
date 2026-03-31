@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, exec } from 'child_process';
- 
+
 /**
  * Реєструє команду "mpytools.installDependencies".
  * Виконує встановлення залежностей, після чого встановлює локальні заглушки.

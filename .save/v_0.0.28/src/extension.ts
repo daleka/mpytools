@@ -1,5 +1,5 @@
-// extension.ts
- 
+//extension.ts
+
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -60,7 +60,7 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   }
 
-  // 3. Елементи статус-бару (Select Port, Run, Stop, нова кнопка "перл", Reset)
+  // 3. Елементи статус-бару (Select Port, Run, Stop, Reset)
   let connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   connectionStatusBarItem.text = '$(plug) Select Port';
   connectionStatusBarItem.tooltip = 'Click to select a MicroPython port';
@@ -85,14 +85,6 @@ export function activate(context: vscode.ExtensionContext): void {
   stopStatusBarItem.hide();
   context.subscriptions.push(stopStatusBarItem);
 
-  // Нова кнопка "перл"
-  let perlStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -2);
-  perlStatusBarItem.text = '$(terminal) Perl';
-  perlStatusBarItem.tooltip = 'Open REPL terminal (without running main.run())';
-  perlStatusBarItem.command = 'mpytools.perl';
-  perlStatusBarItem.hide();
-  context.subscriptions.push(perlStatusBarItem);
-  
   // Кнопка Reset
   let resetStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -2);
   resetStatusBarItem.text = '$(refresh) Reset';
@@ -102,70 +94,25 @@ export function activate(context: vscode.ExtensionContext): void {
   resetStatusBarItem.hide();
   context.subscriptions.push(resetStatusBarItem);
 
-  // --- Нова кнопка-настроек (gear) поруч із Save Project ---
-  // Якщо Save Project створюється з пріоритетом -3, встановлюємо для кнопки-настроек пріоритет -4,
-  // щоб вона була розташована праворуч від Save Project.
-  let settingsStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -4);
-  settingsStatusBarItem.text = '$(gear)';
-  settingsStatusBarItem.tooltip = 'MPyTools Settings';
-  settingsStatusBarItem.command = 'mpytools.openSettings';
-  settingsStatusBarItem.color = '#cccccc';
-  settingsStatusBarItem.show();
-  context.subscriptions.push(settingsStatusBarItem);
-
-  // Реєструємо команду "mpytools.openSettings" для кнопки-настроек
-  vscode.commands.registerCommand('mpytools.openSettings', async (): Promise<void> => {
-    const options: vscode.QuickPickItem[] = [
-      { label: 'Select Compilation Method', description: 'Re-select compilation method' },
-      { label: 'Install Dependencies', description: 'Run dependency installation' }
-    ];
-    const selected = await vscode.window.showQuickPick(options, { placeHolder: 'Select an option' });
-    if (!selected) {
-      return;
-    }
-    if (selected.label === 'Select Compilation Method') {
-      vscode.commands.executeCommand('mpytools.selectCompilationMethod');
-    } else if (selected.label === 'Install Dependencies') {
-      vscode.commands.executeCommand('mpytools.installDependencies');
-    }
-  });
-
-  // Реєструємо команду "mpytools.selectCompilationMethod"
-  vscode.commands.registerCommand('mpytools.selectCompilationMethod', async (): Promise<void> => {
-    const compilationOptions: vscode.QuickPickItem[] = [
-      { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
-      { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
-      { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
-      { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
-      { label: 'No Compilation', description: 'Upload source files directly without compiling' }
-    ];
-    const result = await vscode.window.showQuickPick(compilationOptions, {
-      placeHolder: 'Choose a compilation method',
-      canPickMany: false
-    });
-    if (!result) {
-      return;
-    }
-    if (result.label === 'No Compilation') {
-      selectedCompilationMethod = 'none';
-    } else {
-      const match = result.label.match(/Level (\d+)/);
-      selectedCompilationMethod = match ? match[1] : '0';
-    }
-    vscode.window.showInformationMessage(`Compilation method set to: ${selectedCompilationMethod === 'none' ? 'No Compilation' : 'Optimization O' + selectedCompilationMethod}`);
-  });
-
   // --- Оновлений код вибору порту з асинхронним скануванням ---
   let disposableSelectPort = vscode.commands.registerCommand('mpytools.selectPort', async (): Promise<void> => {
+    // Закриваємо всі термінали з назвою MPY
     vscode.window.terminals
       .filter(t => t.name.startsWith("MPY"))
       .forEach(t => t.dispose());
+
+    // Відкриємо лог
     mpyOutputChannel.show(true);
     mpyOutputChannel.appendLine("=== Select Port command invoked ===");
+
+    // Затримка 300мс для безпеки
     await new Promise(resolve => setTimeout(resolve, 300));
+
     connectionStatusBarItem.text = '$(sync~spin) Scanning ports...';
     connectionStatusBarItem.color = 'yellow';
     connectionStatusBarItem.tooltip = 'Scanning available ports...';
+
+    // Спочатку отримуємо список можливих портів (без uname):
     let availablePorts: string[] = [];
     let portsError: string | null = null;
     try {
@@ -177,94 +124,148 @@ export function activate(context: vscode.ExtensionContext): void {
     } catch (err: any) {
       portsError = err.message ?? String(err);
     }
+
+    // Додаємо 'auto' у список (якщо немає)
     if (!availablePorts.includes('auto')) {
       availablePorts.push('auto');
     }
+
+    // Якщо щось пішло не так
     if (portsError) {
       mpyOutputChannel.appendLine("❌ Error listing ports: " + portsError);
     }
+
+    // Підготуємо QuickPick
     const quickPick = vscode.window.createQuickPick();
     quickPick.placeholder = `Select a port to use (current: ${lastUsedPort})`;
-    quickPick.matchOnDescription = true;
+    quickPick.matchOnDescription = true; // дозволить фільтрувати по description
+
+    // Створюємо items без детальної інформації
     let items: vscode.QuickPickItem[] = availablePorts.map((p) => ({
       label: p,
       description: (p === 'auto') ? '(Automatic detection)' : '(No info yet...)'
     }));
+
+    // Якщо помилка або взагалі нема портів
     if (items.length === 0) {
       items.push({
         label: 'auto',
         description: '(No ports found...)'
       });
     }
+
     quickPick.items = items;
+
+    // Змінна, щоб припинити сканування, якщо користувач вибрав порт
     let stopScanning = false;
+
+    // Запускаємо асинхронно "сканування" кожного порту
+    // (крім 'auto') і оновлення description у quickPick
     (async () => {
       for (let i = 0; i < items.length; i++) {
-        if (stopScanning) { break; }
+        if (stopScanning) {
+          break;
+        }
         let item = items[i];
-        if (item.label === 'auto') { continue; }
+        if (item.label === 'auto') {
+          continue;
+        }
+        let port = item.label;
+        // Спробуємо отримати uname
         try {
-          const deviceInfo = await tryGetDeviceInfo(item.label);
-          if (stopScanning) { break; }
+          const deviceInfo = await tryGetDeviceInfo(port);
+          if (stopScanning) {
+            break;
+          }
           if (deviceInfo) {
             let { sys, rel, mach } = deviceInfo;
-            item.description = sys && rel && mach ? `(${sys} ${rel} ${mach})` : '(Micropython? unrecognized uname)';
+            if (sys && rel && mach) {
+              item.description = `(${sys} ${rel} ${mach})`;
+            } else {
+              item.description = '(Micropython? unrecognized uname)';
+            }
           } else {
             item.description = '(Failed or not MicroPython)';
           }
         } catch (err: any) {
           item.description = `(Access error: ${err.message || err})`;
         }
-        quickPick.items = [...items];
+        // Оновлюємо items QuickPick
+        // (створюємо копію, оновлюємо `item`, і передаємо знову)
+        let newItems = [...items];
+        quickPick.items = newItems;
       }
     })();
+
+    // Коли користувач натиснув Enter/Click
     quickPick.onDidAccept(async () => {
       stopScanning = true;
+
       const chosen = quickPick.selectedItems[0];
       if (!chosen) {
         quickPick.hide();
         return;
       }
+
+      // Затримка 300мс 
       await new Promise(resolve => setTimeout(resolve, 200));
+
       lastUsedPort = chosen.label;
       (global as any).MPY_LAST_PORT = lastUsedPort;
+
       mpyOutputChannel.appendLine(`▶️ Selected port: "${lastUsedPort}"`);
       connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
       connectionStatusBarItem.color = 'yellow';
       connectionStatusBarItem.tooltip = 'Connecting to the device...';
+
+      // Знову закриємо MPY-термінали
       vscode.window.terminals
         .filter(t => t.name.startsWith("MPY"))
         .forEach(t => t.dispose());
+
+      // Невелика пауза
       await new Promise(resolve => setTimeout(resolve, 2000));
+
       const usedPort = (lastUsedPort === 'auto') ? 'auto' : formatPort(lastUsedPort);
       mpyOutputChannel.show(true);
       mpyOutputChannel.appendLine(`⚙️ Fetching device info (version, architecture, small-int bits)...`);
       mpyOutputChannel.appendLine(`⚙️ mpremote connect ${usedPort} exec "import sys; ..."`);
+
       let fetchError: any = null;
       try {
         await fetchMicropythonVersionInfo(usedPort);
       } catch (err) {
         fetchError = err;
       }
+
+      // Оновлюємо дерево, щоб показати НОВИЙ пристрій
       vscode.commands.executeCommand('mpytoolsFileExplorer.refresh');
+
       if (!fetchError) {
         mpyOutputChannel.appendLine(`✅ Connected to port: "${lastUsedPort}"`);
         mpyOutputChannel.appendLine("✅ Fetched device info successfully.");
         mpyOutputChannel.appendLine("");
+
+        // Відображаємо кнопки
         compileStatusBarItem.show();
         runStatusBarItem.show();
         stopStatusBarItem.show();
-        perlStatusBarItem.show();
         resetStatusBarItem.show();
-        connectionStatusBarItem.text = `$(check) ${micropythonSysName ?? '???'} ${micropythonRelease ?? ''} ${lastUsedPort}`;
+
+        connectionStatusBarItem.text = `${micropythonSysName ?? '???'} ${micropythonRelease ?? ''} ${lastUsedPort}`;
         connectionStatusBarItem.color = 'green';
         connectionStatusBarItem.tooltip = 'Port selected';
+
       } else {
         mpyOutputChannel.appendLine(`⚠️ Could not fetch MicroPython info: ${fetchError}`);
         mpyOutputChannel.appendLine("");
       }
+
+      // Прибираємо папку mpy (якщо є)
       removeMpyFolder();
       await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Відкриваємо термінал “MPY Session”
       let connectTerminal = vscode.window.createTerminal('MPY Session');
       connectTerminal.sendText(
         `mpremote connect ${usedPort} exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`
@@ -272,26 +273,20 @@ export function activate(context: vscode.ExtensionContext): void {
       setTimeout(() => {
         connectTerminal.show();
       }, 1500);
+
       quickPick.hide();
     });
+
+    // Якщо користувач закрив QuickPick, зупиняємо сканування
     quickPick.onDidHide(() => {
       stopScanning = true;
     });
+
+    // Показуємо QuickPick
     quickPick.show();
   });
   context.subscriptions.push(disposableSelectPort);
   // --- Кінець оновленого коду вибору порту ---
-
-  // Реєструємо команду "mpytools.perl" для кнопки "перл"
-  vscode.commands.registerCommand('mpytools.perl', async (): Promise<void> => {
-    vscode.window.terminals
-      .filter(t => t.name.startsWith("MPY"))
-      .forEach(t => t.dispose());
-    const usedPort = (lastUsedPort === 'auto') ? 'auto' : formatPort(lastUsedPort);
-    let perlTerminal = vscode.window.createTerminal('MPY Perl');
-    perlTerminal.show();
-    perlTerminal.sendText(`mpremote connect ${usedPort} repl`);
-  });
 
   // Команда "Run Active"
   vscode.commands.registerCommand('mpytools.runActive', async (): Promise<void> => {
@@ -299,13 +294,16 @@ export function activate(context: vscode.ExtensionContext): void {
       t.name.startsWith("MPY") && t.name !== "MPY Compile&download"
     );
     terminalsToClose.forEach(t => t.dispose());
+
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       vscode.window.showWarningMessage("Немає активного файлу для запуску.");
       return;
     }
     const filePath = editor.document.uri.fsPath;
+
     mpyOutputChannel.appendLine("▶️ Run active file: " + filePath);
+
     let runTerminal = vscode.window.createTerminal('MPY Run');
     runTerminal.show();
     runTerminal.sendText(`mpremote run "${filePath}"`);
@@ -315,7 +313,7 @@ export function activate(context: vscode.ExtensionContext): void {
   vscode.commands.registerCommand('mpytools.stop', async (): Promise<void> => {
     const terminal = vscode.window.activeTerminal;
     if (terminal) {
-      terminal.sendText("\x03", false);
+      terminal.sendText("\x03", false); // Ctrl-C
       vscode.window.showInformationMessage("Stop: Ctrl-C відправлено. (Execution stopped)");
       mpyOutputChannel.appendLine("✋ Stop signal (Ctrl-C) sent.");
     } else {
@@ -330,11 +328,14 @@ export function activate(context: vscode.ExtensionContext): void {
         t.name.startsWith("MPY")
       );
       terminalsToClose.forEach(t => t.dispose());
+
       const usedPort = (lastUsedPort === 'auto') ? 'auto' : formatPort(lastUsedPort);
       mpyOutputChannel.appendLine(`🔧 Hard Reset on port "${lastUsedPort}"`);
+
       let resetTerminal = vscode.window.createTerminal('MPY Reset');
       resetTerminal.show();
       resetTerminal.sendText(`mpremote connect ${usedPort} reset`);
+
       vscode.window.showInformationMessage(`Device hard-reset requested on port "${lastUsedPort}"`);
       mpyOutputChannel.appendLine("✅ Hard reset command sent.");
     } catch (err: any) {
@@ -410,7 +411,7 @@ async function tryGetDeviceInfo(port: string): Promise<{ sys: string; rel: strin
 }
 
 /**
- * Отримати інформацію (версія, архітектура, ...).
+ * Отримати (версія, архітектура, ...).
  */
 async function fetchMicropythonVersionInfo(port: string): Promise<void> {
   const cmd = `mpremote connect ${port} exec "` +
@@ -423,6 +424,7 @@ async function fetchMicropythonVersionInfo(port: string): Promise<void> {
     `print('SYSNAME:', u.sysname); ` +
     `print('RELEASE:', u.release); ` +
     `"`;
+
   mpyOutputChannel.appendLine(`🔍 Fetching MicroPython info via: ${cmd}`);
 
   return new Promise<void>((resolve, reject) => {
@@ -469,26 +471,26 @@ async function fetchMicropythonVersionInfo(port: string): Promise<void> {
       for (const line of lines) {
         if (line.startsWith("MPYVER:")) {
           micropythonVersion = line.replace("MPYVER:", "").trim();
-          mpyOutputChannel.appendLine(`📌 micropythonVersion = ${micropythonVersion || 'none'}`);
+          mpyOutputChannel.appendLine(`ℹ️ micropythonVersion = ${micropythonVersion || 'none'}`);
         } else if (line.startsWith("MPYCODE:")) {
           let codeNum = parseInt(line.replace("MPYCODE:", "").trim(), 10);
           if (isNaN(codeNum)) { codeNum = -1; }
           micropythonBytecodeVersion = codeNum >= 0 ? codeNum : undefined;
-          mpyOutputChannel.appendLine(`📌 micropythonBytecodeVersion = ${micropythonBytecodeVersion ?? 'none'}`);
+          mpyOutputChannel.appendLine(`ℹ️ micropythonBytecodeVersion = ${micropythonBytecodeVersion ?? 'none'}`);
         } else if (line.startsWith("MPYARCH:")) {
           const archNum = parseInt(line.replace("MPYARCH:", "").trim(), 10);
           micropythonArchitecture = archMap[archNum] ?? undefined;
-          mpyOutputChannel.appendLine(`📌 micropythonArchitecture = ${micropythonArchitecture || 'none'}`);
+          mpyOutputChannel.appendLine(`ℹ️ micropythonArchitecture = ${micropythonArchitecture || 'none'}`);
         } else if (line.startsWith("MAXSIZE:")) {
           const maxsizeNum = parseInt(line.replace("MAXSIZE:", "").trim(), 10);
           micropythonMsmallIntBits = !isNaN(maxsizeNum) ? interpretMsmallIntBits(maxsizeNum) : undefined;
-          mpyOutputChannel.appendLine(`📌 micropythonMsmallIntBits = ${micropythonMsmallIntBits ?? 'none'}`);
+          mpyOutputChannel.appendLine(`ℹ️ micropythonMsmallIntBits = ${micropythonMsmallIntBits ?? 'none'}`);
         } else if (line.startsWith("SYSNAME:")) {
           sysVal = line.replace("SYSNAME:", "").trim();
-          mpyOutputChannel.appendLine(`📌 sysname = ${sysVal}`);
+          mpyOutputChannel.appendLine(`ℹ️ sysname = ${sysVal}`);
         } else if (line.startsWith("RELEASE:")) {
           relVal = line.replace("RELEASE:", "").trim();
-          mpyOutputChannel.appendLine(`📌 release = ${relVal}`);
+          mpyOutputChannel.appendLine(`ℹ️ release = ${relVal}`);
         }
       }
 
@@ -657,7 +659,7 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Знаходимо всі .py файли рекурсево
+ * Знаходимо всі .py файли рекурсивно
  */
 function findPyFiles(rootDir: string, ignoreList: string[] = []): string[] {
   let results: string[] = [];

@@ -18,4 +18,4 @@ python3 -m pip install mpy-cross
 echo "Installing micropython-stdlib-stubs..."
 python3 -m pip install micropython-stdlib-stubs
 
-echo "SUCCESS: All dependencies installed!"
+echo "SUCCESS: All dependencies installed!" 

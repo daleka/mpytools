@@ -1,4 +1,4 @@
-Write-Host "Checking for Python..."
+Write-Host "Checking for Python..." 
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-Not $python) {
     Write-Host "ERROR: Python not found! Please install Python from https://www.python.org/"
