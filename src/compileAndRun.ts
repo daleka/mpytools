@@ -115,36 +115,18 @@ export function registerCompileAndRunCommand(
     }
 
     const savedWrapMode = context.workspaceState.get<boolean>(wrapNonPySettingKey);
-    const wrapOptions: vscode.QuickPickItem[] = savedWrapMode === false
-      ? [
-          {
-            label: 'Keep non-.py files as-is',
-            description: 'Do not wrap non-.py files (current)'
-          },
-          {
-            label: 'Wrap non-.py files into .py',
-            description: 'Convert non-.py files to .py wrappers before upload/compile'
-          }
-        ]
-      : [
-          {
-            label: 'Wrap non-.py files into .py',
-            description: 'Convert non-.py files to .py wrappers before upload/compile (current)'
-          },
-          {
-            label: 'Keep non-.py files as-is',
-            description: 'Do not wrap non-.py files'
-          }
-        ];
-    const wrapResult = await vscode.window.showQuickPick(wrapOptions, {
-      placeHolder: 'Choose non-.py handling mode',
-      canPickMany: false
-    });
+    const currentWrapModeText = savedWrapMode === false ? 'Keep non-.py files as-is' : 'Wrap non-.py files into .py';
+    const wrapResult = await vscode.window.showInformationMessage(
+      `Choose non-.py handling mode. Current: ${currentWrapModeText}`,
+      { modal: true },
+      'Wrap non-.py files into .py',
+      'Keep non-.py files as-is'
+    );
     if (!wrapResult) {
       vscode.window.showWarningMessage('Compilation canceled: non-.py mode not selected.');
       return;
     }
-    const shouldWrapNonPy = wrapResult.label === 'Wrap non-.py files into .py';
+    const shouldWrapNonPy = wrapResult === 'Wrap non-.py files into .py';
     await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
 
     // 2.4 Підготовчі змінні
