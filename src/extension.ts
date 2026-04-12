@@ -640,7 +640,7 @@ async function compilePyFile(
  */
 async function openTerminalAndRunMain(port: string, debugTerminal: vscode.Terminal): Promise<void> {
   const connectTarget = port === 'auto' ? 'auto' : port;
-  await execPromise(`mpremote connect ${connectTarget} exec "import main; print('__MPY_READY__')"`);
+  mpyOutputChannel.appendLine(`⚙️ Running main via terminal on port: ${connectTarget}`);
   debugTerminal.sendText(`mpremote connect ${connectTarget} exec "import main; main.run()" + repl`);
 }
 
