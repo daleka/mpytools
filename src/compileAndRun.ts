@@ -202,6 +202,7 @@ export function registerCompileAndRunCommand(
                 await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
                 wrappedNonPyCount++;
                 logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
+                logAndScroll(`      ℹ️ Wrapper: ${path.relative(workspaceRoot, getAssetWrapperPyPath(filePath, srcPath))}`);
               } catch (err: any) {
                 vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
                 logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
@@ -295,6 +296,14 @@ function getAssetOutputPath(filePath: string, srcPath: string, mpyPath: string):
   return path.join(mpyPath, assetRelative);
 }
 
+function getAssetWrapperPyPath(filePath: string, srcPath: string): string {
+  const relativeFromSrc = path.relative(srcPath, filePath);
+  const ext = path.extname(relativeFromSrc);
+  const wrapperRelativePath = ext ? relativeFromSrc.slice(0, -ext.length) + '.py' : `${relativeFromSrc}.py`;
+  const workspaceRoot = path.dirname(srcPath);
+  return path.join(workspaceRoot, 'temp', wrapperRelativePath);
+}
+
 function needsAssetRecompile(sourceFilePath: string, outAssetPath: string): boolean {
   if (!fs.existsSync(outAssetPath)) {
     return true;
@@ -314,6 +323,8 @@ async function compileNonPyFileAsAsset(
   const relativeFromSrc = path.relative(srcPath, filePath).replace(/\\/g, '/');
   const outPath = getAssetOutputPath(filePath, srcPath, mpyPath);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  const wrapperPyPath = getAssetWrapperPyPath(filePath, srcPath);
+  fs.mkdirSync(path.dirname(wrapperPyPath), { recursive: true });
 
   const moduleBaseName = path.basename(filePath, path.extname(filePath));
   const constantName = moduleBaseName.toUpperCase().replace(/[^A-Z0-9]/g, '_') || 'ASSET';
@@ -355,21 +366,9 @@ async function compileNonPyFileAsAsset(
     ].join('\n');
   }
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mpytools-asset-'));
-  const tempPyFile = path.join(tempDir, 'asset_wrapper.py');
-  fs.writeFileSync(tempPyFile, wrapperCode, 'utf-8');
-
-  try {
-    await execPromise(`mpy-cross "${tempPyFile}" -o "${outPath}"`);
-    return outPath;
-  } finally {
-    if (fs.existsSync(tempPyFile)) {
-      fs.unlinkSync(tempPyFile);
-    }
-    if (fs.existsSync(tempDir)) {
-      fs.rmdirSync(tempDir);
-    }
-  }
+  fs.writeFileSync(wrapperPyPath, wrapperCode, 'utf-8');
+  await execPromise(`mpy-cross "${wrapperPyPath}" -o "${outPath}"`);
+  return outPath;
 }
 
 /**
