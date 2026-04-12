@@ -10,14 +10,15 @@ export class MpyToolsPanelItem extends vscode.TreeItem {
             arguments: [this.portPath]
         };
         this.checkbox = this.isChecked ? '$(check)' : '$(circle-outline)';
-        this.tooltip = `Click to ${this.isChecked ? 'deselect' : 'select'} this port`;
+        this.updatePresentation();
     }
 
     // Виводимо статус чекбоксу поряд з назвою порту
     checkbox: string;
 
-    get label(): string {
-        return `${this.checkbox} ${this.portPath}`;
+    updatePresentation(): void {
+        this.label = `${this.checkbox} ${this.portPath}`;
+        this.tooltip = `Click to ${this.isChecked ? 'deselect' : 'select'} this port`;
     }
 }
 
@@ -66,8 +67,14 @@ export class MpyToolsPanelProvider implements vscode.TreeDataProvider<MpyToolsPa
     private togglePortSelection(port: string) {
         const selectedPortIndex = this.ports.findIndex(item => item.portPath === port);
         if (selectedPortIndex !== -1) {
-            this.ports.forEach(item => item.isChecked = false);
+            this.ports.forEach(item => {
+                item.isChecked = false;
+                item.checkbox = '$(circle-outline)';
+                item.updatePresentation();
+            });
             this.ports[selectedPortIndex].isChecked = true;
+            this.ports[selectedPortIndex].checkbox = '$(check)';
+            this.ports[selectedPortIndex].updatePresentation();
             this.selectedPort = port;
         }
         this._onDidChangeTreeData.fire();
