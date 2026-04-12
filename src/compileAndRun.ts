@@ -142,7 +142,6 @@ export function registerCompileAndRunCommand(
     }, async (progress) => {
       let compiledCount = 0;
       let wrappedNonPyCount = 0;
-      let copiedNonPyCount = 0;
 
       if (currentMethod !== 'none') {
         // --- Компіляційний режим ---
@@ -194,11 +193,8 @@ export function registerCompileAndRunCommand(
               logAndScroll("");
             }
           } else {
-            const relativeFromSrc = path.relative(srcPath, filePath);
             const outAssetPath = getAssetOutputPath(filePath, srcPath, mpyPath);
-            const outRawPath = path.join(mpyPath, relativeFromSrc);
             const shouldWrap = needsAssetRecompile(filePath, outAssetPath);
-            const shouldCopyRaw = !fs.existsSync(outRawPath) || !areFilesIdentical(filePath, outRawPath);
 
             if (shouldWrap) {
               progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
@@ -211,22 +207,14 @@ export function registerCompileAndRunCommand(
                 vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
                 logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
               }
-            }
-
-            if (shouldCopyRaw) {
-              copyWithMkDir(filePath, outRawPath);
-              copiedNonPyCount++;
-              logAndScroll(`      ✅ Copied raw asset: ${shortName} -> ${path.relative(workspaceRoot, outRawPath)}`);
-            }
-
-            if (!shouldWrap && !shouldCopyRaw) {
+            } else {
               logAndScroll(`   🔹 Skipped (unchanged asset): ${shortName}`);
             }
 
             logAndScroll("");
           }
         }
-        logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${wrappedNonPyCount} non-py files; Copied raw ${copiedNonPyCount} non-py files.`);
+        logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${wrappedNonPyCount} non-py files.`);
       } else {
         // --- Режим "No Compilation" ---
         progress.report({ message: 'Skipping compilation, uploading source files...' });
