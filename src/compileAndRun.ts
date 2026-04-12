@@ -142,6 +142,7 @@ export function registerCompileAndRunCommand(
     }, async (progress) => {
       let compiledCount = 0;
       let wrappedNonPyCount = 0;
+      let copiedRawNonPyCount = 0;
 
       if (currentMethod !== 'none') {
         // --- Компіляційний режим ---
@@ -193,28 +194,50 @@ export function registerCompileAndRunCommand(
               logAndScroll("");
             }
           } else {
+            const relativeFromSrc = path.relative(srcPath, filePath);
             const outAssetPath = getAssetOutputPath(filePath, srcPath, mpyPath);
-            const shouldWrap = needsAssetRecompile(filePath, outAssetPath);
+            const outRawPath = path.join(mpyPath, relativeFromSrc);
+            const keepRaw = shouldKeepAssetRaw(filePath);
 
-            if (shouldWrap) {
-              progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
-              logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
-              try {
-                await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
-                wrappedNonPyCount++;
-                logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
-              } catch (err: any) {
-                vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
-                logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
+            if (keepRaw) {
+              if (fs.existsSync(outAssetPath)) {
+                fs.unlinkSync(outAssetPath);
+                logAndScroll(`      🧹 Removed stale wrapped asset: ${path.relative(workspaceRoot, outAssetPath)}`);
+              }
+              if (!fs.existsSync(outRawPath) || !areFilesIdentical(filePath, outRawPath)) {
+                progress.report({ message: `Copying raw asset: ${shortName}` });
+                copyWithMkDir(filePath, outRawPath);
+                copiedRawNonPyCount++;
+                logAndScroll(`      ✅ Copied raw asset: ${shortName}`);
+              } else {
+                logAndScroll(`   🔹 Skipped (unchanged raw asset): ${shortName}`);
               }
             } else {
-              logAndScroll(`   🔹 Skipped (unchanged asset): ${shortName}`);
+              if (fs.existsSync(outRawPath)) {
+                fs.unlinkSync(outRawPath);
+                logAndScroll(`      🧹 Removed stale raw asset: ${path.relative(workspaceRoot, outRawPath)}`);
+              }
+              const shouldWrap = needsAssetRecompile(filePath, outAssetPath);
+              if (shouldWrap) {
+                progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
+                logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
+                try {
+                  await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
+                  wrappedNonPyCount++;
+                  logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
+                } catch (err: any) {
+                  vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
+                  logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
+                }
+              } else {
+                logAndScroll(`   🔹 Skipped (unchanged wrapped asset): ${shortName}`);
+              }
             }
 
             logAndScroll("");
           }
         }
-        logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${wrappedNonPyCount} non-py files.`);
+        logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${wrappedNonPyCount} non-py files; Copied raw ${copiedRawNonPyCount} web/static assets.`);
       } else {
         // --- Режим "No Compilation" ---
         progress.report({ message: 'Skipping compilation, uploading source files...' });
@@ -294,6 +317,16 @@ function getAssetOutputPath(filePath: string, srcPath: string, mpyPath: string):
   const withoutExt = ext ? relativeFromSrc.slice(0, -ext.length) : relativeFromSrc;
   const assetRelative = `${withoutExt}.mpy`;
   return path.join(mpyPath, assetRelative);
+}
+
+function shouldKeepAssetRaw(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  const rawAssetExtensions = new Set([
+    '.html', '.htm', '.css', '.js', '.json', '.txt',
+    '.svg', '.png', '.jpg', '.jpeg', '.ico', '.webp',
+    '.gif', '.xml', '.csv', '.map', '.woff', '.woff2', '.ttf'
+  ]);
+  return rawAssetExtensions.has(ext);
 }
 
 function needsAssetRecompile(sourceFilePath: string, outAssetPath: string): boolean {
