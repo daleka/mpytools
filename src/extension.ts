@@ -640,13 +640,13 @@ async function compilePyFile(
  */
 async function openTerminalAndRunMain(port: string, debugTerminal: vscode.Terminal): Promise<void> {
   const connectTarget = port === 'auto' ? 'auto' : port;
-  debugTerminal.sendText(`echo [MPyTools] connect ${connectTarget} repl`);
   mpyOutputChannel.appendLine(`⚙️ Opening REPL on port: ${connectTarget}`);
   debugTerminal.sendText(`mpremote connect ${connectTarget} repl`);
   await new Promise(resolve => setTimeout(resolve, 1500));
   mpyOutputChannel.appendLine('⚙️ Sending Ctrl-C to ensure REPL prompt is ready');
   debugTerminal.sendText('\x03', false);
   await new Promise(resolve => setTimeout(resolve, 300));
+  debugTerminal.sendText('print("[MPyTools] REPL ready")');
   mpyOutputChannel.appendLine(`⚙️ Importing main in REPL on port: ${connectTarget}`);
   debugTerminal.sendText('import main');
   await new Promise(resolve => setTimeout(resolve, 200));
