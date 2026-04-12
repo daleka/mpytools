@@ -86,32 +86,34 @@ export function registerCompileAndRunCommand(
     }
 
     // 2.3 Запит методу оптимізації/компіляції
-    let currentMethod = getSelectedMethod();
-    if (!currentMethod) {
-      const compilationOptions: vscode.QuickPickItem[] = [
-        { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
-        { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
-        { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
-        { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
-        { label: 'No Compilation', description: 'Upload source files directly without compiling' }
-      ];
-      const result = await vscode.window.showQuickPick(compilationOptions, {
-        placeHolder: 'Choose mpy-cross optimization level or select "No Compilation"',
-        canPickMany: false
-      });
-      if (!result) {
-        vscode.window.showWarningMessage('Compilation canceled: no method selected.');
-        return;
-      }
-      if (result.label === 'No Compilation') {
-        setSelectedMethod('none');
-        currentMethod = 'none';
-      } else {
-        const match = result.label.match(/Level (\d+)/);
-        const chosen = match ? match[1] : '0';
-        setSelectedMethod(chosen);
-        currentMethod = chosen;
-      }
+    const savedMethod = getSelectedMethod();
+    const savedMethodLabel = savedMethod === 'none' ? 'No Compilation' : `mpy-cross optimization Level ${savedMethod ?? '0'}`;
+    const compilationOptions: vscode.QuickPickItem[] = [
+      { label: savedMethodLabel, description: 'current' },
+      { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
+      { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
+      { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
+      { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
+      { label: 'No Compilation', description: 'Upload source files directly without compiling' }
+    ];
+    const uniqueCompilationOptions = compilationOptions.filter((item, index, arr) => arr.findIndex(x => x.label === item.label) === index);
+    const result = await vscode.window.showQuickPick(uniqueCompilationOptions, {
+      placeHolder: 'Choose mpy-cross optimization level or select "No Compilation"',
+      canPickMany: false
+    });
+    if (!result) {
+      vscode.window.showWarningMessage('Compilation canceled: no method selected.');
+      return;
+    }
+    let currentMethod: string;
+    if (result.label === 'No Compilation') {
+      setSelectedMethod('none');
+      currentMethod = 'none';
+    } else {
+      const match = result.label.match(/Level (\d+)/);
+      const chosen = match ? match[1] : (savedMethod && savedMethod !== 'none' ? savedMethod : '0');
+      setSelectedMethod(chosen);
+      currentMethod = chosen;
     }
 
     const savedWrapMode = context.workspaceState.get<boolean>(wrapNonPySettingKey);
