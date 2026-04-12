@@ -646,8 +646,11 @@ async function openTerminalAndRunMain(port: string, debugTerminal: vscode.Termin
   mpyOutputChannel.appendLine('⚙️ Sending Ctrl-C to ensure REPL prompt is ready');
   debugTerminal.sendText('\x03', false);
   await new Promise(resolve => setTimeout(resolve, 300));
+  mpyOutputChannel.appendLine(`⚙️ Importing main in REPL on port: ${connectTarget}`);
+  debugTerminal.sendText('import main');
+  await new Promise(resolve => setTimeout(resolve, 200));
   mpyOutputChannel.appendLine(`⚙️ Running main.run() from REPL on port: ${connectTarget}`);
-  debugTerminal.sendText('import main; main.run()');
+  debugTerminal.sendText('main.run()');
 }
 
 /**
