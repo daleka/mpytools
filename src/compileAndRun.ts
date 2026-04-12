@@ -326,8 +326,6 @@ async function compileNonPyFileAsAsset(
   const wrapperPyPath = getAssetWrapperPyPath(filePath, srcPath);
   fs.mkdirSync(path.dirname(wrapperPyPath), { recursive: true });
 
-  const moduleBaseName = path.basename(filePath, path.extname(filePath));
-  const constantName = moduleBaseName.toUpperCase().replace(/[^A-Z0-9]/g, '_') || 'ASSET';
   const payloadB64 = source.toString('base64');
   const b64Chunks: string[] = [];
   for (let i = 0; i < payloadB64.length; i += 256) {
@@ -351,15 +349,6 @@ async function compileNonPyFileAsAsset(
     wrapperCode += [
       `def get_text(encoding='utf-8'):`,
       '    return get_bytes().decode(encoding)',
-      '',
-      `${constantName} = get_text()`,
-      `CONTENT = ${constantName}`,
-      ''
-    ].join('\n');
-  } else {
-    wrapperCode += [
-      `${constantName} = get_bytes()`,
-      `DATA = ${constantName}`,
       ''
     ].join('\n');
   }
