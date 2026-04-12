@@ -57,7 +57,7 @@ export function registerDependenciesCommand(
         let externallyManagedErrorDetected = false;
 
         // Обробка стандартного виводу (stdout)
-        installerProcess.stdout.on('data', (dataBuffer) => {
+        installerProcess.stdout.on('data', (dataBuffer: Buffer | string) => {
           const textOutput = dataBuffer.toString().trim();
           if (!textOutput) {
             return;
@@ -76,7 +76,7 @@ export function registerDependenciesCommand(
         });
 
         // Обробка виводу помилок (stderr)
-        installerProcess.stderr.on('data', (errorBuffer) => {
+        installerProcess.stderr.on('data', (errorBuffer: Buffer | string) => {
           const errorText = errorBuffer.toString().trim();
           if (errorText) {
             outputChannel.appendLine("❌ Error: " + errorText);
@@ -89,7 +89,7 @@ export function registerDependenciesCommand(
         });
 
         // Коли процес завершується
-        installerProcess.on('close', (exitCode) => {
+        installerProcess.on('close', (exitCode: number | null) => {
           // Якщо виявлено помилку «externally-managed-environment»
           if (externallyManagedErrorDetected) {
             outputChannel.appendLine("❌ The system Python is externally managed (PEP 668).");
@@ -113,7 +113,7 @@ export function registerDependenciesCommand(
                 vscode.window.showInformationMessage(
                   "Installation completed. Do you want to reload VSCode for changes to take effect? / Встановлення завершено. Перезавантажити VSCode?",
                   "Yes", "No"
-                ).then(answer => {
+                ).then((answer: string | undefined) => {
                   if (answer === "Yes") {
                     vscode.commands.executeCommand('workbench.action.reloadWindow');
                   }
@@ -297,7 +297,7 @@ function installPythonPackageToTarget(
   return new Promise<void>((resolve, reject) => {
     const commandToInstall = `python -m pip install --upgrade --target="${targetFolderPath}" ${pythonPackageName}`;
     outputChannel.appendLine(`CMD: ${commandToInstall}`);
-    exec(commandToInstall, (error, stdout, stderr) => {
+    exec(commandToInstall, (error: Error | null, stdout: string, stderr: string) => {
       if (stdout) {
         // Виводимо першу строку, щоб не захаращувати лог
         outputChannel.appendLine("      " + stdout.trim().split('\n')[0]);
@@ -318,7 +318,7 @@ function installPythonPackageToTarget(
  */
 function removeExistingFolderRecursively(folderPath: string): void {
   if (fs.existsSync(folderPath)) {
-    fs.readdirSync(folderPath).forEach((fileName) => {
+    fs.readdirSync(folderPath).forEach((fileName: string) => {
       const currentItemPath = path.join(folderPath, fileName);
       if (fs.lstatSync(currentItemPath).isDirectory()) {
         removeExistingFolderRecursively(currentItemPath);
