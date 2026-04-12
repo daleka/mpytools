@@ -193,15 +193,20 @@ export function registerCompileAndRunCommand(
               logAndScroll("");
             }
           } else {
-            progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
-            logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
-            try {
-              const outAssetPath = await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
-              copiedNonPyCount++;
-              logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
-            } catch (err: any) {
-              vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
-              logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
+            const outAssetPath = getAssetOutputPath(filePath, srcPath, mpyPath);
+            if (needsAssetRecompile(filePath, outAssetPath)) {
+              progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
+              logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
+              try {
+                await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
+                copiedNonPyCount++;
+                logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
+              } catch (err: any) {
+                vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
+                logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
+              }
+            } else {
+              logAndScroll(`   🔹 Skipped (unchanged asset): ${shortName}`);
             }
             logAndScroll("");
           }
@@ -283,10 +288,18 @@ function copyWithMkDir(srcFile: string, destFile: string) {
 function getAssetOutputPath(filePath: string, srcPath: string, mpyPath: string): string {
   const relativeFromSrc = path.relative(srcPath, filePath);
   const ext = path.extname(relativeFromSrc);
-  const extName = ext ? ext.slice(1).toLowerCase() : 'bin';
   const withoutExt = ext ? relativeFromSrc.slice(0, -ext.length) : relativeFromSrc;
-  const assetRelative = `${withoutExt}_${extName}_asset.mpy`;
+  const assetRelative = `${withoutExt}.mpy`;
   return path.join(mpyPath, assetRelative);
+}
+
+function needsAssetRecompile(sourceFilePath: string, outAssetPath: string): boolean {
+  if (!fs.existsSync(outAssetPath)) {
+    return true;
+  }
+  const sourceStat = fs.statSync(sourceFilePath);
+  const outStat = fs.statSync(outAssetPath);
+  return sourceStat.mtime > outStat.mtime;
 }
 
 async function compileNonPyFileAsAsset(
