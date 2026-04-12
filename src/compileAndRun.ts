@@ -141,6 +141,7 @@ export function registerCompileAndRunCommand(
       cancellable: false
     }, async (progress) => {
       let compiledCount = 0;
+      let wrappedNonPyCount = 0;
       let copiedNonPyCount = 0;
 
       if (currentMethod !== 'none') {
@@ -193,25 +194,39 @@ export function registerCompileAndRunCommand(
               logAndScroll("");
             }
           } else {
+            const relativeFromSrc = path.relative(srcPath, filePath);
             const outAssetPath = getAssetOutputPath(filePath, srcPath, mpyPath);
-            if (needsAssetRecompile(filePath, outAssetPath)) {
+            const outRawPath = path.join(mpyPath, relativeFromSrc);
+            const shouldWrap = needsAssetRecompile(filePath, outAssetPath);
+            const shouldCopyRaw = !fs.existsSync(outRawPath) || !areFilesIdentical(filePath, outRawPath);
+
+            if (shouldWrap) {
               progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
               logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
               try {
                 await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
-                copiedNonPyCount++;
+                wrappedNonPyCount++;
                 logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
               } catch (err: any) {
                 vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
                 logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
               }
-            } else {
+            }
+
+            if (shouldCopyRaw) {
+              copyWithMkDir(filePath, outRawPath);
+              copiedNonPyCount++;
+              logAndScroll(`      ✅ Copied raw asset: ${shortName} -> ${path.relative(workspaceRoot, outRawPath)}`);
+            }
+
+            if (!shouldWrap && !shouldCopyRaw) {
               logAndScroll(`   🔹 Skipped (unchanged asset): ${shortName}`);
             }
+
             logAndScroll("");
           }
         }
-        logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${copiedNonPyCount} non-py files.`);
+        logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${wrappedNonPyCount} non-py files; Copied raw ${copiedNonPyCount} non-py files.`);
       } else {
         // --- Режим "No Compilation" ---
         progress.report({ message: 'Skipping compilation, uploading source files...' });
