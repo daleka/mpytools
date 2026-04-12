@@ -6,6 +6,7 @@ import { exec } from 'child_process';
  
 import { mpyOutputChannel } from './extension';
 import { micropythonSysName } from './extension';
+import { getSelectedPort as getSharedSelectedPort } from './sharedState';
 
 /** Нормалізація пристроєвого шляху – забезпечуємо, що шлях починається з "/" */
 function normalizeDevicePath(p: string): string {
@@ -31,7 +32,7 @@ function getRemoteFilePath(p: string): string {
 
 /** Функція для отримання вибраного порту */
 function getSelectedPort(): string {
-  return (global as any).MPY_LAST_PORT || 'auto';
+  return getSharedSelectedPort() || 'auto';
 }
 
 /** Глобальна мапа для збереження відповідності тимчасового файлу та реального device-шляху */
@@ -448,7 +449,7 @@ class FileManagerProvider implements vscode.TreeDataProvider<FileItem> {
   public async getChildren(element?: FileItem): Promise<FileItem[]> {
     if (!element) {
       // Якщо порт не вибраний або дорівнює 'auto', повертаємо елемент для вибору порту
-      if (getSelectedPort() === 'auto' || !(global as any).MPY_LAST_PORT) {
+      if (getSelectedPort() === 'auto' || !getSharedSelectedPort()) {
         const selectPortItem = new FileItem("🔌 Select Port", vscode.TreeItemCollapsibleState.None, 'select-port');
         selectPortItem.command = {
           command: 'mpytools.selectPort',

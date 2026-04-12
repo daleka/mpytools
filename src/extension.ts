@@ -1,14 +1,3 @@
-<<<<<<< HEAD
-//extension.ts
-
-import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
-import { activateMpyToolsPanel } from './mpytoolsPanelActivator';
-
-let mountedTerminal: vscode.Terminal | undefined;
-let selectedPort: string | null = null;  // Глобальна змінна для збереження вибраного порту
-=======
 // extension.ts
  
 import * as vscode from 'vscode';
@@ -20,48 +9,11 @@ import { registerDependenciesCommand } from './dependenciesInstaller';
 import { registerSaveProjectCommand } from './saveProject';
 import { registerCompileAndRunCommand } from './compileAndRun';
 import { registerFileManager } from './fileManager';
->>>>>>> rollback-0.4-new
+import { setSelectedPort as setSharedSelectedPort } from './sharedState';
 
 // Вікно логу
 export const mpyOutputChannel = vscode.window.createOutputChannel("MPyTools Log");
 
-<<<<<<< HEAD
-    let connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
-    connectionStatusBarItem.text = '$(x) MPY: Not Connected';
-    connectionStatusBarItem.tooltip = 'Натисніть, щоб підключитись до MicroPython пристрою';
-    connectionStatusBarItem.color = "red";
-    connectionStatusBarItem.command = 'mpytools.connect';
-    connectionStatusBarItem.show();
-    context.subscriptions.push(connectionStatusBarItem);
-
-    // Інші статус-бар елементи залишаються незмінними...
-
-    // Команда підключення
-    let disposableConnect = vscode.commands.registerCommand('mpytools.connect', () => {
-        if (selectedPort) {
-            // Якщо вибрано порт, підключаємось до нього
-            const terminal = vscode.window.createTerminal(`MPY Session (${selectedPort})`);
-            terminal.show();
-            connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
-            connectionStatusBarItem.tooltip = `Підключення до порту ${selectedPort}...`;
-            connectionStatusBarItem.color = "yellow";
-            terminal.sendText(`mpremote connect ${selectedPort} exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`);
-        } else {
-            // Якщо порт не вибрано, підключаємось автоматично
-            const terminal = vscode.window.createTerminal("MPY Session");
-            terminal.show();
-            connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
-            connectionStatusBarItem.tooltip = 'Підключення до MicroPython пристрою...';
-            connectionStatusBarItem.color = "yellow";
-            terminal.sendText(`mpremote connect auto exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`);
-        }
-
-        setTimeout(() => {
-            connectionStatusBarItem.text = '$(check) MPY: Connected';
-            connectionStatusBarItem.tooltip = 'Підключено до MicroPython пристрою';
-            connectionStatusBarItem.color = "green";
-        }, 2000);
-=======
 // Інформація про поточну прошивку/архітектуру
 export let micropythonVersion: string | undefined = undefined;
 export let micropythonBytecodeVersion: number | undefined = undefined;
@@ -106,15 +58,9 @@ export function activate(context: vscode.ExtensionContext): void {
       } else {
         console.log("User chose not to install dependencies.");
       }
->>>>>>> rollback-0.4-new
     });
   }
 
-<<<<<<< HEAD
-    // Інші команди залишаються незмінними...
-
-    activateMpyToolsPanel(context);
-=======
   // 3. Елементи статус-бару (Select Port, Run, Stop, нова кнопка "перл", Reset)
   let connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   connectionStatusBarItem.text = '$(plug) Select Port';
@@ -282,7 +228,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       await new Promise(resolve => setTimeout(resolve, 200));
       lastUsedPort = chosen.label;
-      (global as any).MPY_LAST_PORT = lastUsedPort;
+      setSharedSelectedPort(lastUsedPort);
       mpyOutputChannel.appendLine(`▶️ Selected port: "${lastUsedPort}"`);
       connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
       connectionStatusBarItem.color = 'yellow';
@@ -441,7 +387,6 @@ async function listRawPorts(): Promise<{ ports: string[]; errorMsg?: string }> {
       });
     });
   });
->>>>>>> rollback-0.4-new
 }
 
 /**
@@ -694,22 +639,9 @@ async function compilePyFile(
  * Запуск main.run() через mpremote
  */
 async function openTerminalAndRunMain(port: string, debugTerminal: vscode.Terminal): Promise<void> {
-  let connectCmd = '';
-  if (port === 'auto') {
-    connectCmd = 'mpremote connect auto exec "import main" + repl';
-  } else {
-    connectCmd = `mpremote connect ${port} exec "import main" + repl`;
-  }
-  debugTerminal.sendText(connectCmd);
-  await delay(2000);
-  debugTerminal.sendText('main.run()');
-}
-
-/**
- * Затримка
- */
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  const connectTarget = port === 'auto' ? 'auto' : port;
+  await execPromise(`mpremote connect ${connectTarget} exec "import main; print('__MPY_READY__')"`);
+  debugTerminal.sendText(`mpremote connect ${connectTarget} exec "import main; main.run()" + repl`);
 }
 
 /**
