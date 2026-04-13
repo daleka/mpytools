@@ -89,6 +89,7 @@ export function registerCompileAndRunCommand(
     // 2.3 Запит методу оптимізації/компіляції
     let currentMethod = context.workspaceState.get<string>(compileMethodSettingKey) ?? getSelectedMethod();
     let resetMpyFolder = false;
+    let methodSelectedNow = false;
     if (!currentMethod) {
       const compilationOptions: vscode.QuickPickItem[] = [
         { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
@@ -114,12 +115,13 @@ export function registerCompileAndRunCommand(
       setSelectedMethod(currentMethod);
       await context.workspaceState.update(compileMethodSettingKey, currentMethod);
       resetMpyFolder = true;
+      methodSelectedNow = true;
     } else {
       setSelectedMethod(currentMethod);
     }
 
     let shouldWrapNonPy = context.workspaceState.get<boolean>(wrapNonPySettingKey);
-    if (shouldWrapNonPy === undefined) {
+    if (shouldWrapNonPy === undefined || methodSelectedNow) {
       const wrapOptions: vscode.QuickPickItem[] = [
         {
           label: 'Wrap non-.py files into .py',
