@@ -2,7 +2,7 @@
   "name": "mpytools",
   "displayName": "MPyTools",
   "description": "MPyTools – просте та гнучке розширення для роботи з MicroPython у VS Code. | MPyTools – a simple and flexible extension for working with MicroPython in VS Code.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "preview": true,
   "publisher": "daleka",
   "engines": {
