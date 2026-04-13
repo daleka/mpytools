@@ -2,7 +2,7 @@
   "name": "mpytools",
   "displayName": "MPyTools",
   "description": "MPyTools – просте та гнучке розширення для роботи з MicroPython у VS Code. | MPyTools – a simple and flexible extension for working with MicroPython in VS Code.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "preview": true,
   "publisher": "daleka",
   "engines": {
@@ -25,13 +25,6 @@
       },
       {
         "command": "mpytools.compileAndMount",
-<<<<<<< HEAD
-        "title": "MPY: Компіляція PY -> MPY та монтування"
-      },
-      {
-        "command": "mpytools.showSettings",
-        "title": "MPyTools: Показати панель налаштувань"
-=======
         "title": "Compile PY → MPY and mount / Компіляція PY → MPY та монтування"
       },
       {
@@ -89,31 +82,18 @@
       {
         "command": "mpytoolsFileExplorer.clearDevice",
         "title": "🧹Clear Device / Очистити пристрій"
->>>>>>> rollback-0.4-new
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-<<<<<<< HEAD
-          "id": "mpytools",
-          "title": "MPyTools",
-          "icon": "resources/default.svg"
-=======
           "id": "mpytoolsFileManagerContainer",
           "title": "MPyTools",
           "icon": "icon2.svg"
->>>>>>> rollback-0.4-new
         }
       ]
     },
     "views": {
-<<<<<<< HEAD
-      "mpytools": [
-        {
-          "id": "mpytoolsSettings",
-          "name": "Settings"
-=======
       "mpytoolsFileManagerContainer": [
         {
           "id": "mpytoolsFileExplorer",
@@ -174,7 +154,6 @@
           "command": "mpytoolsFileExplorer.clearDevice",
           "when": "viewItem == device-root",
           "group": "device_actions"
->>>>>>> rollback-0.4-new
         }
       ]
     }

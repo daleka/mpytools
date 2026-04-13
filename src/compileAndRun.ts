@@ -47,6 +47,9 @@ export function registerCompileAndRunCommand(
   getMicropythonArchitecture: () => string | undefined,
   getMicropythonMsmallIntBits: () => number | undefined
 ): vscode.StatusBarItem {
+  const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
+  const compileMethodSettingKey = 'mpytools.compileMethod';
+  const compileSettingsDirtyKey = 'mpytools.compileSettingsDirty';
   // 1) Створюємо кнопку для "Compile & Run"
   let compileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
   compileStatusBarItem.text = '$(rocket)Compile&Run';
@@ -85,8 +88,12 @@ export function registerCompileAndRunCommand(
     }
 
     // 2.3 Запит методу оптимізації/компіляції
-    let currentMethod = getSelectedMethod();
-    if (!currentMethod) {
+    const shouldReconfigure = context.workspaceState.get<boolean>(compileSettingsDirtyKey) === true;
+    let currentMethod = context.workspaceState.get<string>(compileMethodSettingKey) ?? getSelectedMethod();
+    let shouldWrapNonPy = context.workspaceState.get<boolean>(wrapNonPySettingKey);
+    let shouldResetMpyFolder = false;
+
+    if (shouldReconfigure || !currentMethod || shouldWrapNonPy === undefined) {
       const compilationOptions: vscode.QuickPickItem[] = [
         { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
         { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
@@ -102,21 +109,48 @@ export function registerCompileAndRunCommand(
         vscode.window.showWarningMessage('Compilation canceled: no method selected.');
         return;
       }
-      if (result.label === 'No Compilation') {
-        setSelectedMethod('none');
-        currentMethod = 'none';
-      } else {
-        const match = result.label.match(/Level (\d+)/);
-        const chosen = match ? match[1] : '0';
-        setSelectedMethod(chosen);
-        currentMethod = chosen;
+      currentMethod = result.label === 'No Compilation'
+        ? 'none'
+        : (result.label.match(/Level (\d+)/)?.[1] ?? '0');
+      await context.workspaceState.update(compileMethodSettingKey, currentMethod);
+
+      const wrapOptions: vscode.QuickPickItem[] = [
+        {
+          label: 'ON — Compile non-.py files',
+          description: 'Wrap common files (e.g. .html, .js, .css, .json, .txt) into .py and compile/upload'
+        },
+        {
+          label: 'OFF — Do not compile non-.py files',
+          description: 'Keep non-.py files as-is and upload them without wrapping/compiling'
+        }
+      ];
+      const wrapResult = await vscode.window.showQuickPick(wrapOptions, {
+        placeHolder: 'Choose non-.py handling mode',
+        canPickMany: false
+      });
+      if (!wrapResult) {
+        vscode.window.showWarningMessage('Compilation canceled: non-.py mode not selected.');
+        return;
       }
+      shouldWrapNonPy = wrapResult.label === 'ON — Compile non-.py files';
+      await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
+      await context.workspaceState.update(compileSettingsDirtyKey, false);
+      shouldResetMpyFolder = true;
     }
+    if (!currentMethod || shouldWrapNonPy === undefined) {
+      vscode.window.showWarningMessage('Compilation canceled: settings are not initialized.');
+      return;
+    }
+    setSelectedMethod(currentMethod);
 
     // 2.4 Підготовчі змінні
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const srcPath = path.join(workspaceRoot, 'src');
     const mpyPath = path.join(workspaceRoot, 'mpy');
+    if (shouldResetMpyFolder && fs.existsSync(mpyPath)) {
+      fs.rmSync(mpyPath, { recursive: true, force: true });
+      logAndScroll("🗑 Cleared 'mpy' folder.");
+    }
 
     // Закриваємо термінали MPY
     vscode.window.terminals.forEach((t) => {
@@ -129,6 +163,7 @@ export function registerCompileAndRunCommand(
     outputChannel.show(false);
     logAndScroll("🔹 Starting Compile & Run...");
     logAndScroll(`   - Selected method: ${currentMethod === 'none' ? 'No Compilation' : 'Optimization O' + currentMethod}`);
+    logAndScroll(`   - Non-.py mode: ${shouldWrapNonPy ? 'Wrap into .py' : 'Keep as-is'}`);
 
     // Нова зміна: змінюємо стан кнопки на активний – червоний із спінером
     compileStatusBarItem.text = '$(sync~spin)Compile&Run';
@@ -141,7 +176,9 @@ export function registerCompileAndRunCommand(
       cancellable: false
     }, async (progress) => {
       let compiledCount = 0;
+      let wrappedNonPyCount = 0;
       let copiedNonPyCount = 0;
+      let copiedPyCount = 0;
 
       if (currentMethod !== 'none') {
         // --- Компіляційний режим ---
@@ -169,13 +206,11 @@ export function registerCompileAndRunCommand(
         })(srcPath);
         logAndScroll(`   🔹 Found ${allFiles.length} total files in "src".`);
 
-        // Обробляємо кожен файл: компіляція для .py, копіювання для інших
+        // Обробляємо кожен файл: компіляція для .py, обгортка+компіляція для інших
         for (let i = 0; i < allFiles.length; i++) {
           const filePath = allFiles[i];
           const shortName = path.relative(workspaceRoot, filePath);
           const extName = path.extname(filePath).toLowerCase();
-          const relativeFromSrc = path.relative(srcPath, filePath);
-          const outPath = path.join(mpyPath, relativeFromSrc);
 
           if (extName === '.py') {
             if (needsRecompile(filePath, srcPath, mpyPath)) {
@@ -195,39 +230,113 @@ export function registerCompileAndRunCommand(
               logAndScroll("");
             }
           } else {
-            // Копіюємо файли, що не мають розширення .py
-            if (!fs.existsSync(outPath)) {
-              copyWithMkDir(filePath, outPath);
-              copiedNonPyCount++;
-              logAndScroll(`   🔹 Copied (new): ${shortName}`);
-            } else {
-              if (!areFilesIdentical(filePath, outPath)) {
-                copyWithMkDir(filePath, outPath);
-                copiedNonPyCount++;
-                logAndScroll(`   🔹 Replaced (updated): ${shortName}`);
+            if (shouldWrapNonPy) {
+              const outAssetPath = getAssetOutputPath(filePath, srcPath, mpyPath);
+              const shouldWrap = needsAssetRecompile(filePath, outAssetPath);
+              if (shouldWrap) {
+                progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
+                logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
+                try {
+                  await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
+                  wrappedNonPyCount++;
+                  logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
+                  logAndScroll(`      ℹ️ Wrapper: ${path.relative(workspaceRoot, getAssetWrapperPyPath(filePath, srcPath))}`);
+                } catch (err: any) {
+                  vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
+                  logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
+                }
               } else {
-                logAndScroll(`   🔹 Skipped (identical ${extName}): ${shortName}`);
+                logAndScroll(`   🔹 Skipped (unchanged wrapped asset): ${shortName}`);
+              }
+            } else {
+              const outRawPath = getRawOutputPath(filePath, srcPath, mpyPath);
+              if (needsFileCopy(filePath, outRawPath)) {
+                progress.report({ message: `Copying raw asset: ${shortName}` });
+                logAndScroll(`   🔹 Copying raw asset: ${shortName}`);
+                copyWithMkDir(filePath, outRawPath);
+                copiedNonPyCount++;
+                logAndScroll(`      ✅ OK: ${shortName}`);
+              } else {
+                logAndScroll(`   🔹 Skipped (unchanged raw asset): ${shortName}`);
               }
             }
             logAndScroll("");
           }
         }
-        logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Copied ${copiedNonPyCount} non-py files.`);
+        if (shouldWrapNonPy) {
+          logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${wrappedNonPyCount} non-py files.`);
+        } else {
+          logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Copied ${copiedNonPyCount} non-py files as-is.`);
+        }
       } else {
         // --- Режим "No Compilation" ---
-        progress.report({ message: 'Skipping compilation, uploading source files...' });
-        logAndScroll("🔹 Skipping compilation. Uploading source files directly from 'src'...");
+        progress.report({ message: 'Preparing files in mpy without compilation...' });
+        logAndScroll("🔹 No compilation selected. Preparing files in 'mpy'...");
+        if (!fs.existsSync(mpyPath)) {
+          fs.mkdirSync(mpyPath);
+          logAndScroll(`   ✅ Created directory: ${mpyPath}`);
+        }
+        let allFiles: string[] = [];
+        (function recurse(dir: string) {
+          if (!fs.existsSync(dir)) { return; }
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (let entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              recurse(fullPath);
+            } else {
+              allFiles.push(fullPath);
+            }
+          }
+        })(srcPath);
+        for (let i = 0; i < allFiles.length; i++) {
+          const filePath = allFiles[i];
+          const shortName = path.relative(workspaceRoot, filePath);
+          const extName = path.extname(filePath).toLowerCase();
+          if (extName === '.py') {
+            const outPyPath = getRawOutputPath(filePath, srcPath, mpyPath);
+            if (needsFileCopy(filePath, outPyPath)) {
+              progress.report({ message: `Copying .py: ${shortName}` });
+              copyWithMkDir(filePath, outPyPath);
+              copiedPyCount++;
+              logAndScroll(`   🔹 Copied .py: ${shortName}`);
+            } else {
+              logAndScroll(`   🔹 Skipped (unchanged .py): ${shortName}`);
+            }
+          } else if (shouldWrapNonPy) {
+            const outWrappedPyPath = getAssetPyOutputPath(filePath, srcPath, mpyPath);
+            if (needsFileCopy(filePath, outWrappedPyPath)) {
+              progress.report({ message: `Wrapping asset to .py: ${shortName}` });
+              await writeNonPyAssetPy(filePath, srcPath, outWrappedPyPath);
+              wrappedNonPyCount++;
+              logAndScroll(`   🔹 Wrapped asset to .py: ${shortName} -> ${path.relative(workspaceRoot, outWrappedPyPath)}`);
+            } else {
+              logAndScroll(`   🔹 Skipped (unchanged wrapped .py asset): ${shortName}`);
+            }
+          } else {
+            const outRawPath = getRawOutputPath(filePath, srcPath, mpyPath);
+            if (needsFileCopy(filePath, outRawPath)) {
+              progress.report({ message: `Copying raw asset: ${shortName}` });
+              copyWithMkDir(filePath, outRawPath);
+              copiedNonPyCount++;
+              logAndScroll(`   🔹 Copied raw asset: ${shortName}`);
+            } else {
+              logAndScroll(`   🔹 Skipped (unchanged raw asset): ${shortName}`);
+            }
+          }
+        }
+        if (shouldWrapNonPy) {
+          logAndScroll(`   ✅ Copied ${copiedPyCount} .py files; Wrapped ${wrappedNonPyCount} non-py files into .py.`);
+        } else {
+          logAndScroll(`   ✅ Copied ${copiedPyCount} .py files; Copied ${copiedNonPyCount} non-py files as-is.`);
+        }
       }
 
       // 2.6 Копіюємо файли на пристрій
       const usedPort = getLastUsedPort();
       const finalPort = (usedPort === 'auto') ? 'auto' : formatPort(usedPort);
       let copyPath: string;
-      if (currentMethod !== 'none') {
-        copyPath = os.platform() === 'win32' ? `${mpyPath}\\.` : `${mpyPath}/.`;
-      } else {
-        copyPath = os.platform() === 'win32' ? `${srcPath}\\.` : `${srcPath}/.`;
-      }
+      copyPath = os.platform() === 'win32' ? `${mpyPath}\\.` : `${mpyPath}/.`;
       const copyCmd = (finalPort === 'auto')
         ? `mpremote connect auto fs cp -r "${copyPath}" ":/"`
         : `mpremote connect ${finalPort} fs cp -r "${copyPath}" ":/"`;
@@ -246,7 +355,7 @@ export function registerCompileAndRunCommand(
       }
 
       // 2.7 (Опційно) Оцінимо розмір скопійованої теки
-      const folderSizeKB = getFolderSizeKB(currentMethod !== 'none' ? mpyPath : srcPath);
+      const folderSizeKB = getFolderSizeKB(mpyPath);
       logAndScroll(`🔹 Total size of uploaded folder: ${folderSizeKB.toFixed(2)} KB`);
       logAndScroll("🔹 Launching main...");
 
@@ -261,13 +370,7 @@ export function registerCompileAndRunCommand(
       let debugTerminal = vscode.window.createTerminal('MPY Debugging');
       debugTerminal.show();
 
-      if (currentMethod !== 'none') {
-        // Для режиму компіляції: підключаємося і відправляємо main.run()
-        await openTerminalAndRunMain(finalPort, debugTerminal);
-      } else {
-        // Для режиму "No Compilation": просто підключаємося без відправки main.run()
-        debugTerminal.sendText(`mpremote connect ${finalPort} exec "import main" + repl`);
-      }
+      await openTerminalAndRunMain(finalPort, debugTerminal);
 
       compileStatusBarItem.text = '$(rocket)Compile&Run';
       compileStatusBarItem.color = '#00BFFF';
@@ -284,6 +387,110 @@ export function registerCompileAndRunCommand(
 function copyWithMkDir(srcFile: string, destFile: string) {
   fs.mkdirSync(path.dirname(destFile), { recursive: true });
   fs.copyFileSync(srcFile, destFile);
+}
+
+function getAssetOutputPath(filePath: string, srcPath: string, mpyPath: string): string {
+  const relativeFromSrc = path.relative(srcPath, filePath);
+  const ext = path.extname(relativeFromSrc);
+  const withoutExt = ext ? relativeFromSrc.slice(0, -ext.length) : relativeFromSrc;
+  const assetRelative = `${withoutExt}.mpy`;
+  return path.join(mpyPath, assetRelative);
+}
+
+function getRawOutputPath(filePath: string, srcPath: string, mpyPath: string): string {
+  const relativeFromSrc = path.relative(srcPath, filePath);
+  return path.join(mpyPath, relativeFromSrc);
+}
+
+function getAssetPyOutputPath(filePath: string, srcPath: string, mpyPath: string): string {
+  const relativeFromSrc = path.relative(srcPath, filePath);
+  const ext = path.extname(relativeFromSrc);
+  const withoutExt = ext ? relativeFromSrc.slice(0, -ext.length) : relativeFromSrc;
+  return path.join(mpyPath, `${withoutExt}.py`);
+}
+
+function getAssetWrapperPyPath(filePath: string, srcPath: string): string {
+  const relativeFromSrc = path.relative(srcPath, filePath);
+  const ext = path.extname(relativeFromSrc);
+  const wrapperRelativePath = ext ? relativeFromSrc.slice(0, -ext.length) + '.py' : `${relativeFromSrc}.py`;
+  const workspaceRoot = path.dirname(srcPath);
+  return path.join(workspaceRoot, 'temp', wrapperRelativePath);
+}
+
+function needsAssetRecompile(sourceFilePath: string, outAssetPath: string): boolean {
+  if (!fs.existsSync(outAssetPath)) {
+    return true;
+  }
+  const sourceStat = fs.statSync(sourceFilePath);
+  const outStat = fs.statSync(outAssetPath);
+  return sourceStat.mtime > outStat.mtime;
+}
+
+function needsFileCopy(sourceFilePath: string, outputPath: string): boolean {
+  if (!fs.existsSync(outputPath)) {
+    return true;
+  }
+  const sourceStat = fs.statSync(sourceFilePath);
+  const outStat = fs.statSync(outputPath);
+  return sourceStat.mtime > outStat.mtime;
+}
+
+function buildNonPyAssetWrapperCode(filePath: string, srcPath: string, source: Buffer): string {
+  const relativeFromSrc = path.relative(srcPath, filePath).replace(/\\/g, '/');
+  const payloadB64 = source.toString('base64');
+  const b64Chunks: string[] = [];
+  for (let i = 0; i < payloadB64.length; i += 256) {
+    b64Chunks.push(payloadB64.slice(i, i + 256));
+  }
+  const b64Tuple = b64Chunks.map((chunk) => JSON.stringify(chunk)).join(',\n    ');
+  const textPayload = source.toString('utf-8');
+  const isUtf8Text = Buffer.from(textPayload, 'utf-8').equals(source);
+  let wrapperCode = [
+    `# Auto-generated by MPyTools from "${relativeFromSrc}"`,
+    'import ubinascii as _b',
+    `SOURCE_PATH = "${relativeFromSrc}"`,
+    `_B64_CHUNKS = (\n    ${b64Tuple}\n)`,
+    '',
+    'def get_bytes():',
+    "    return _b.a2b_base64(''.join(_B64_CHUNKS))",
+    ''
+  ].join('\n');
+
+  if (isUtf8Text) {
+    wrapperCode += [
+      `def get_text(encoding='utf-8'):`,
+      '    return get_bytes().decode(encoding)',
+      ''
+    ].join('\n');
+  }
+
+  return wrapperCode;
+}
+
+async function writeNonPyAssetPy(
+  filePath: string,
+  srcPath: string,
+  outputPyPath: string
+): Promise<void> {
+  const source = fs.readFileSync(filePath);
+  const wrapperCode = buildNonPyAssetWrapperCode(filePath, srcPath, source);
+  fs.mkdirSync(path.dirname(outputPyPath), { recursive: true });
+  fs.writeFileSync(outputPyPath, wrapperCode, 'utf-8');
+}
+
+async function compileNonPyFileAsAsset(
+  filePath: string,
+  srcPath: string,
+  mpyPath: string,
+  execPromise: (cmd: string) => Promise<string>
+): Promise<string> {
+  const source = fs.readFileSync(filePath);
+  const outPath = getAssetOutputPath(filePath, srcPath, mpyPath);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  const wrapperPyPath = getAssetWrapperPyPath(filePath, srcPath);
+  await writeNonPyAssetPy(filePath, srcPath, wrapperPyPath);
+  await execPromise(`mpy-cross "${wrapperPyPath}" -o "${outPath}"`);
+  return outPath;
 }
 
 /**

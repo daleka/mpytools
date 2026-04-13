@@ -1,14 +1,3 @@
-<<<<<<< HEAD
-//extension.ts
-
-import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
-import { activateMpyToolsPanel } from './mpytoolsPanelActivator';
-
-let mountedTerminal: vscode.Terminal | undefined;
-let selectedPort: string | null = null;  // Глобальна змінна для збереження вибраного порту
-=======
 // extension.ts
  
 import * as vscode from 'vscode';
@@ -20,48 +9,11 @@ import { registerDependenciesCommand } from './dependenciesInstaller';
 import { registerSaveProjectCommand } from './saveProject';
 import { registerCompileAndRunCommand } from './compileAndRun';
 import { registerFileManager } from './fileManager';
->>>>>>> rollback-0.4-new
+import { setSelectedPort as setSharedSelectedPort } from './sharedState';
 
 // Вікно логу
 export const mpyOutputChannel = vscode.window.createOutputChannel("MPyTools Log");
 
-<<<<<<< HEAD
-    let connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
-    connectionStatusBarItem.text = '$(x) MPY: Not Connected';
-    connectionStatusBarItem.tooltip = 'Натисніть, щоб підключитись до MicroPython пристрою';
-    connectionStatusBarItem.color = "red";
-    connectionStatusBarItem.command = 'mpytools.connect';
-    connectionStatusBarItem.show();
-    context.subscriptions.push(connectionStatusBarItem);
-
-    // Інші статус-бар елементи залишаються незмінними...
-
-    // Команда підключення
-    let disposableConnect = vscode.commands.registerCommand('mpytools.connect', () => {
-        if (selectedPort) {
-            // Якщо вибрано порт, підключаємось до нього
-            const terminal = vscode.window.createTerminal(`MPY Session (${selectedPort})`);
-            terminal.show();
-            connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
-            connectionStatusBarItem.tooltip = `Підключення до порту ${selectedPort}...`;
-            connectionStatusBarItem.color = "yellow";
-            terminal.sendText(`mpremote connect ${selectedPort} exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`);
-        } else {
-            // Якщо порт не вибрано, підключаємось автоматично
-            const terminal = vscode.window.createTerminal("MPY Session");
-            terminal.show();
-            connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
-            connectionStatusBarItem.tooltip = 'Підключення до MicroPython пристрою...';
-            connectionStatusBarItem.color = "yellow";
-            terminal.sendText(`mpremote connect auto exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`);
-        }
-
-        setTimeout(() => {
-            connectionStatusBarItem.text = '$(check) MPY: Connected';
-            connectionStatusBarItem.tooltip = 'Підключено до MicroPython пристрою';
-            connectionStatusBarItem.color = "green";
-        }, 2000);
-=======
 // Інформація про поточну прошивку/архітектуру
 export let micropythonVersion: string | undefined = undefined;
 export let micropythonBytecodeVersion: number | undefined = undefined;
@@ -79,6 +31,9 @@ let selectedCompilationMethod: string | undefined = undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log('MPyTools розширення активовано.');
+  const compileMethodSettingKey = 'mpytools.compileMethod';
+  const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
+  const compileSettingsDirtyKey = 'mpytools.compileSettingsDirty';
 
   // 1. Реєструємо команду встановлення залежностей
   registerDependenciesCommand(context, mpyOutputChannel);
@@ -106,15 +61,9 @@ export function activate(context: vscode.ExtensionContext): void {
       } else {
         console.log("User chose not to install dependencies.");
       }
->>>>>>> rollback-0.4-new
     });
   }
 
-<<<<<<< HEAD
-    // Інші команди залишаються незмінними...
-
-    activateMpyToolsPanel(context);
-=======
   // 3. Елементи статус-бару (Select Port, Run, Stop, нова кнопка "перл", Reset)
   let connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   connectionStatusBarItem.text = '$(plug) Select Port';
@@ -170,8 +119,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Реєструємо команду "mpytools.openSettings" для кнопки-настроек
   vscode.commands.registerCommand('mpytools.openSettings', async (): Promise<void> => {
+    const wrapEnabled = context.workspaceState.get<boolean>(wrapNonPySettingKey);
     const options: vscode.QuickPickItem[] = [
       { label: 'Select Compilation Method', description: 'Re-select compilation method' },
+      { label: 'Compile non-.py files (ON/OFF)', description: `Current: ${wrapEnabled === false ? 'OFF' : 'ON'}` },
       { label: 'Install Dependencies', description: 'Run dependency installation' }
     ];
     const selected = await vscode.window.showQuickPick(options, { placeHolder: 'Select an option' });
@@ -180,6 +131,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (selected.label === 'Select Compilation Method') {
       vscode.commands.executeCommand('mpytools.selectCompilationMethod');
+    } else if (selected.label === 'Compile non-.py files (ON/OFF)') {
+      vscode.commands.executeCommand('mpytools.selectNonPyCompilationMode');
     } else if (selected.label === 'Install Dependencies') {
       vscode.commands.executeCommand('mpytools.installDependencies');
     }
@@ -207,11 +160,38 @@ export function activate(context: vscode.ExtensionContext): void {
       const match = result.label.match(/Level (\d+)/);
       selectedCompilationMethod = match ? match[1] : '0';
     }
+    await context.workspaceState.update(compileMethodSettingKey, selectedCompilationMethod);
+    await context.workspaceState.update(compileSettingsDirtyKey, false);
     vscode.window.showInformationMessage(`Compilation method set to: ${selectedCompilationMethod === 'none' ? 'No Compilation' : 'Optimization O' + selectedCompilationMethod}`);
+  });
+
+  vscode.commands.registerCommand('mpytools.selectNonPyCompilationMode', async (): Promise<void> => {
+    const options: vscode.QuickPickItem[] = [
+      {
+        label: 'ON — Compile non-.py files',
+        description: 'Wrap common files (e.g. .html, .js, .css, .json, .txt) into .py and compile/upload'
+      },
+      {
+        label: 'OFF — Do not compile non-.py files',
+        description: 'Keep non-.py files as-is and upload them without wrapping/compiling'
+      }
+    ];
+    const result = await vscode.window.showQuickPick(options, {
+      placeHolder: 'Choose non-.py handling mode',
+      canPickMany: false
+    });
+    if (!result) {
+      return;
+    }
+    const shouldWrapNonPy = result.label === 'ON — Compile non-.py files';
+    await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
+    await context.workspaceState.update(compileSettingsDirtyKey, false);
+    vscode.window.showInformationMessage(`Compile non-.py files: ${shouldWrapNonPy ? 'ON' : 'OFF'}`);
   });
 
   // --- Оновлений код вибору порту з асинхронним скануванням ---
   let disposableSelectPort = vscode.commands.registerCommand('mpytools.selectPort', async (): Promise<void> => {
+    await context.workspaceState.update(compileSettingsDirtyKey, true);
     vscode.window.terminals
       .filter(t => t.name.startsWith("MPY"))
       .forEach(t => t.dispose());
@@ -282,7 +262,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       await new Promise(resolve => setTimeout(resolve, 200));
       lastUsedPort = chosen.label;
-      (global as any).MPY_LAST_PORT = lastUsedPort;
+      setSharedSelectedPort(lastUsedPort);
       mpyOutputChannel.appendLine(`▶️ Selected port: "${lastUsedPort}"`);
       connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
       connectionStatusBarItem.color = 'yellow';
@@ -441,7 +421,6 @@ async function listRawPorts(): Promise<{ ports: string[]; errorMsg?: string }> {
       });
     });
   });
->>>>>>> rollback-0.4-new
 }
 
 /**
@@ -694,22 +673,20 @@ async function compilePyFile(
  * Запуск main.run() через mpremote
  */
 async function openTerminalAndRunMain(port: string, debugTerminal: vscode.Terminal): Promise<void> {
-  let connectCmd = '';
-  if (port === 'auto') {
-    connectCmd = 'mpremote connect auto exec "import main" + repl';
-  } else {
-    connectCmd = `mpremote connect ${port} exec "import main" + repl`;
-  }
-  debugTerminal.sendText(connectCmd);
-  await delay(2000);
+  const connectTarget = port === 'auto' ? 'auto' : port;
+  mpyOutputChannel.appendLine(`⚙️ Opening REPL on port: ${connectTarget}`);
+  debugTerminal.sendText(`mpremote connect ${connectTarget} repl`);
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  mpyOutputChannel.appendLine('⚙️ Sending Ctrl-C to ensure REPL prompt is ready');
+  debugTerminal.sendText('\x03', false);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  debugTerminal.sendText('print("[MPyTools] REPL ready")');
+  mpyOutputChannel.appendLine(`⚙️ Importing main in REPL on port: ${connectTarget}`);
+  debugTerminal.sendText('import main');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  mpyOutputChannel.appendLine(`⚙️ Running main.run() from REPL on port: ${connectTarget}`);
+  debugTerminal.sendText('print("[MPyTools] main.run()")');
   debugTerminal.sendText('main.run()');
-}
-
-/**
- * Затримка
- */
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
