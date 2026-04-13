@@ -49,6 +49,7 @@ export function registerCompileAndRunCommand(
 ): vscode.StatusBarItem {
   const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
   const compileMethodSettingKey = 'mpytools.compileMethod';
+  const compileSettingsPortKey = 'mpytools.compileSettingsPort';
   // 1) Створюємо кнопку для "Compile & Run"
   let compileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
   compileStatusBarItem.text = '$(rocket)Compile&Run';
@@ -87,10 +88,13 @@ export function registerCompileAndRunCommand(
     }
 
     // 2.3 Запит методу оптимізації/компіляції
+    const activePortForSettings = getLastUsedPort();
+    const savedPortForSettings = context.workspaceState.get<string>(compileSettingsPortKey);
+    const requiresSelectionForPort = savedPortForSettings !== activePortForSettings;
     let currentMethod = context.workspaceState.get<string>(compileMethodSettingKey) ?? getSelectedMethod();
     let resetMpyFolder = false;
     let methodSelectedNow = false;
-    if (!currentMethod) {
+    if (!currentMethod || requiresSelectionForPort) {
       const compilationOptions: vscode.QuickPickItem[] = [
         { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
         { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
@@ -121,7 +125,7 @@ export function registerCompileAndRunCommand(
     }
 
     let shouldWrapNonPy = context.workspaceState.get<boolean>(wrapNonPySettingKey);
-    if (shouldWrapNonPy === undefined || methodSelectedNow) {
+    if (shouldWrapNonPy === undefined || methodSelectedNow || requiresSelectionForPort) {
       const wrapOptions: vscode.QuickPickItem[] = [
         {
           label: 'Wrap non-.py files into .py',
@@ -148,6 +152,7 @@ export function registerCompileAndRunCommand(
       vscode.window.showWarningMessage('Compilation canceled: settings are not initialized.');
       return;
     }
+    await context.workspaceState.update(compileSettingsPortKey, activePortForSettings);
 
     // 2.4 Підготовчі змінні
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
