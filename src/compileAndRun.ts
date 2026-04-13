@@ -48,6 +48,7 @@ export function registerCompileAndRunCommand(
   getMicropythonMsmallIntBits: () => number | undefined
 ): vscode.StatusBarItem {
   const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
+  const compileMethodSettingKey = 'mpytools.compileMethod';
   // 1) Створюємо кнопку для "Compile & Run"
   let compileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
   compileStatusBarItem.text = '$(rocket)Compile&Run';
@@ -86,73 +87,74 @@ export function registerCompileAndRunCommand(
     }
 
     // 2.3 Запит методу оптимізації/компіляції
-    const savedMethod = getSelectedMethod();
-    const savedMethodLabel = savedMethod === 'none' ? 'No Compilation' : `mpy-cross optimization Level ${savedMethod ?? '0'}`;
-    const compilationOptions: vscode.QuickPickItem[] = [
-      { label: savedMethodLabel, description: 'current' },
-      { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
-      { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
-      { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
-      { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
-      { label: 'No Compilation', description: 'Upload source files directly without compiling' }
-    ];
-    const uniqueCompilationOptions = compilationOptions.filter((item, index, arr) => arr.findIndex(x => x.label === item.label) === index);
-    const result = await vscode.window.showQuickPick(uniqueCompilationOptions, {
-      placeHolder: 'Choose mpy-cross optimization level or select "No Compilation"',
-      canPickMany: false
-    });
-    if (!result) {
-      vscode.window.showWarningMessage('Compilation canceled: no method selected.');
-      return;
-    }
-    let currentMethod: string;
-    if (result.label === 'No Compilation') {
-      setSelectedMethod('none');
-      currentMethod = 'none';
+    let currentMethod = context.workspaceState.get<string>(compileMethodSettingKey) ?? getSelectedMethod();
+    let resetMpyFolder = false;
+    if (!currentMethod) {
+      const compilationOptions: vscode.QuickPickItem[] = [
+        { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
+        { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
+        { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
+        { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
+        { label: 'No Compilation', description: 'Upload source files directly without compiling' }
+      ];
+      const result = await vscode.window.showQuickPick(compilationOptions, {
+        placeHolder: 'Choose mpy-cross optimization level or select "No Compilation"',
+        canPickMany: false
+      });
+      if (!result) {
+        vscode.window.showWarningMessage('Compilation canceled: no method selected.');
+        return;
+      }
+      if (result.label === 'No Compilation') {
+        currentMethod = 'none';
+      } else {
+        const match = result.label.match(/Level (\d+)/);
+        currentMethod = match ? match[1] : '0';
+      }
+      setSelectedMethod(currentMethod);
+      await context.workspaceState.update(compileMethodSettingKey, currentMethod);
+      resetMpyFolder = true;
     } else {
-      const match = result.label.match(/Level (\d+)/);
-      const chosen = match ? match[1] : (savedMethod && savedMethod !== 'none' ? savedMethod : '0');
-      setSelectedMethod(chosen);
-      currentMethod = chosen;
+      setSelectedMethod(currentMethod);
     }
 
-    const savedWrapMode = context.workspaceState.get<boolean>(wrapNonPySettingKey);
-    const wrapOptions: vscode.QuickPickItem[] = savedWrapMode === false
-      ? [
-          {
-            label: 'Keep non-.py files as-is',
-            description: 'Do not wrap non-.py files (current)'
-          },
-          {
-            label: 'Wrap non-.py files into .py',
-            description: 'Convert non-.py files to .py wrappers before upload/compile'
-          }
-        ]
-      : [
-          {
-            label: 'Wrap non-.py files into .py',
-            description: 'Convert non-.py files to .py wrappers before upload/compile (current)'
-          },
-          {
-            label: 'Keep non-.py files as-is',
-            description: 'Do not wrap non-.py files'
-          }
-        ];
-    const wrapResult = await vscode.window.showQuickPick(wrapOptions, {
-      placeHolder: 'Choose non-.py handling mode',
-      canPickMany: false
-    });
-    if (!wrapResult) {
-      vscode.window.showWarningMessage('Compilation canceled: non-.py mode not selected.');
+    let shouldWrapNonPy = context.workspaceState.get<boolean>(wrapNonPySettingKey);
+    if (shouldWrapNonPy === undefined) {
+      const wrapOptions: vscode.QuickPickItem[] = [
+        {
+          label: 'Wrap non-.py files into .py',
+          description: 'Convert non-.py files to .py wrappers before upload/compile'
+        },
+        {
+          label: 'Keep non-.py files as-is',
+          description: 'Do not wrap non-.py files'
+        }
+      ];
+      const wrapResult = await vscode.window.showQuickPick(wrapOptions, {
+        placeHolder: 'Choose non-.py handling mode',
+        canPickMany: false
+      });
+      if (!wrapResult) {
+        vscode.window.showWarningMessage('Compilation canceled: non-.py mode not selected.');
+        return;
+      }
+      shouldWrapNonPy = wrapResult.label === 'Wrap non-.py files into .py';
+      await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
+      resetMpyFolder = true;
+    }
+    if (shouldWrapNonPy === undefined || !currentMethod) {
+      vscode.window.showWarningMessage('Compilation canceled: settings are not initialized.');
       return;
     }
-    const shouldWrapNonPy = wrapResult.label === 'Wrap non-.py files into .py';
-    await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
 
     // 2.4 Підготовчі змінні
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const srcPath = path.join(workspaceRoot, 'src');
     const mpyPath = path.join(workspaceRoot, 'mpy');
+    if (resetMpyFolder && fs.existsSync(mpyPath)) {
+      fs.rmSync(mpyPath, { recursive: true, force: true });
+      logAndScroll("🗑 Cleared 'mpy' folder after first-time settings selection.");
+    }
 
     // Закриваємо термінали MPY
     vscode.window.terminals.forEach((t) => {
