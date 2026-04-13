@@ -49,6 +49,7 @@ export function registerCompileAndRunCommand(
 ): vscode.StatusBarItem {
   const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
   const compileMethodSettingKey = 'mpytools.compileMethod';
+  const compileSettingsPortKey = 'mpytools.compileSettingsPort';
   // 1) Створюємо кнопку для "Compile & Run"
   let compileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
   compileStatusBarItem.text = '$(rocket)Compile&Run';
@@ -87,53 +88,68 @@ export function registerCompileAndRunCommand(
     }
 
     // 2.3 Запит методу оптимізації/компіляції
-    const compilationOptions: vscode.QuickPickItem[] = [
-      { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
-      { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
-      { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
-      { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
-      { label: 'No Compilation', description: 'Upload source files directly without compiling' }
-    ];
-    const result = await vscode.window.showQuickPick(compilationOptions, {
-      placeHolder: 'Choose mpy-cross optimization level or select "No Compilation"',
-      canPickMany: false
-    });
-    if (!result) {
-      vscode.window.showWarningMessage('Compilation canceled: no method selected.');
-      return;
-    }
-    const currentMethod = result.label === 'No Compilation'
-      ? 'none'
-      : (result.label.match(/Level (\d+)/)?.[1] ?? '0');
-    setSelectedMethod(currentMethod);
-    await context.workspaceState.update(compileMethodSettingKey, currentMethod);
+    const activePortForSettings = getLastUsedPort();
+    const savedPortForSettings = context.workspaceState.get<string>(compileSettingsPortKey);
+    const shouldReconfigure = savedPortForSettings !== activePortForSettings;
+    let currentMethod = context.workspaceState.get<string>(compileMethodSettingKey) ?? getSelectedMethod();
+    let shouldWrapNonPy = context.workspaceState.get<boolean>(wrapNonPySettingKey);
+    let shouldResetMpyFolder = false;
 
-    const wrapOptions: vscode.QuickPickItem[] = [
-      {
-        label: 'Wrap non-.py files into .py',
-        description: 'Convert non-.py files to .py wrappers before upload/compile'
-      },
-      {
-        label: 'Keep non-.py files as-is',
-        description: 'Do not wrap non-.py files'
+    if (shouldReconfigure || !currentMethod || shouldWrapNonPy === undefined) {
+      const compilationOptions: vscode.QuickPickItem[] = [
+        { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
+        { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
+        { label: 'mpy-cross optimization Level 2', description: 'Medium optimization' },
+        { label: 'mpy-cross optimization Level 3', description: 'Max optimization' },
+        { label: 'No Compilation', description: 'Upload source files directly without compiling' }
+      ];
+      const result = await vscode.window.showQuickPick(compilationOptions, {
+        placeHolder: 'Choose mpy-cross optimization level or select "No Compilation"',
+        canPickMany: false
+      });
+      if (!result) {
+        vscode.window.showWarningMessage('Compilation canceled: no method selected.');
+        return;
       }
-    ];
-    const wrapResult = await vscode.window.showQuickPick(wrapOptions, {
-      placeHolder: 'Choose non-.py handling mode',
-      canPickMany: false
-    });
-    if (!wrapResult) {
-      vscode.window.showWarningMessage('Compilation canceled: non-.py mode not selected.');
+      currentMethod = result.label === 'No Compilation'
+        ? 'none'
+        : (result.label.match(/Level (\d+)/)?.[1] ?? '0');
+      await context.workspaceState.update(compileMethodSettingKey, currentMethod);
+
+      const wrapOptions: vscode.QuickPickItem[] = [
+        {
+          label: 'Wrap non-.py files into .py',
+          description: 'Convert non-.py files to .py wrappers before upload/compile'
+        },
+        {
+          label: 'Keep non-.py files as-is',
+          description: 'Do not wrap non-.py files'
+        }
+      ];
+      const wrapResult = await vscode.window.showQuickPick(wrapOptions, {
+        placeHolder: 'Choose non-.py handling mode',
+        canPickMany: false
+      });
+      if (!wrapResult) {
+        vscode.window.showWarningMessage('Compilation canceled: non-.py mode not selected.');
+        return;
+      }
+      shouldWrapNonPy = wrapResult.label === 'Wrap non-.py files into .py';
+      await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
+      await context.workspaceState.update(compileSettingsPortKey, activePortForSettings);
+      shouldResetMpyFolder = true;
+    }
+    if (!currentMethod || shouldWrapNonPy === undefined) {
+      vscode.window.showWarningMessage('Compilation canceled: settings are not initialized.');
       return;
     }
-    const shouldWrapNonPy = wrapResult.label === 'Wrap non-.py files into .py';
-    await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
+    setSelectedMethod(currentMethod);
 
     // 2.4 Підготовчі змінні
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const srcPath = path.join(workspaceRoot, 'src');
     const mpyPath = path.join(workspaceRoot, 'mpy');
-    if (fs.existsSync(mpyPath)) {
+    if (shouldResetMpyFolder && fs.existsSync(mpyPath)) {
       fs.rmSync(mpyPath, { recursive: true, force: true });
       logAndScroll("🗑 Cleared 'mpy' folder.");
     }
