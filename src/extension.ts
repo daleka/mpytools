@@ -158,6 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // --- Оновлений код вибору порту з асинхронним скануванням ---
   let disposableSelectPort = vscode.commands.registerCommand('mpytools.selectPort', async (): Promise<void> => {
+    await context.workspaceState.update('mpytools.compileSettingsDirty', true);
     vscode.window.terminals
       .filter(t => t.name.startsWith("MPY"))
       .forEach(t => t.dispose());

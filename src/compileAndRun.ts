@@ -49,7 +49,7 @@ export function registerCompileAndRunCommand(
 ): vscode.StatusBarItem {
   const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
   const compileMethodSettingKey = 'mpytools.compileMethod';
-  const compileSettingsPortKey = 'mpytools.compileSettingsPort';
+  const compileSettingsDirtyKey = 'mpytools.compileSettingsDirty';
   // 1) Створюємо кнопку для "Compile & Run"
   let compileStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
   compileStatusBarItem.text = '$(rocket)Compile&Run';
@@ -88,9 +88,7 @@ export function registerCompileAndRunCommand(
     }
 
     // 2.3 Запит методу оптимізації/компіляції
-    const activePortForSettings = getLastUsedPort();
-    const savedPortForSettings = context.workspaceState.get<string>(compileSettingsPortKey);
-    const shouldReconfigure = savedPortForSettings !== activePortForSettings;
+    const shouldReconfigure = context.workspaceState.get<boolean>(compileSettingsDirtyKey) === true;
     let currentMethod = context.workspaceState.get<string>(compileMethodSettingKey) ?? getSelectedMethod();
     let shouldWrapNonPy = context.workspaceState.get<boolean>(wrapNonPySettingKey);
     let shouldResetMpyFolder = false;
@@ -136,7 +134,7 @@ export function registerCompileAndRunCommand(
       }
       shouldWrapNonPy = wrapResult.label === 'Wrap non-.py files into .py';
       await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
-      await context.workspaceState.update(compileSettingsPortKey, activePortForSettings);
+      await context.workspaceState.update(compileSettingsDirtyKey, false);
       shouldResetMpyFolder = true;
     }
     if (!currentMethod || shouldWrapNonPy === undefined) {
