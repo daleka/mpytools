@@ -31,6 +31,9 @@ let selectedCompilationMethod: string | undefined = undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log('MPyTools розширення активовано.');
+  const compileMethodSettingKey = 'mpytools.compileMethod';
+  const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
+  const compileSettingsDirtyKey = 'mpytools.compileSettingsDirty';
 
   // 1. Реєструємо команду встановлення залежностей
   registerDependenciesCommand(context, mpyOutputChannel);
@@ -116,8 +119,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Реєструємо команду "mpytools.openSettings" для кнопки-настроек
   vscode.commands.registerCommand('mpytools.openSettings', async (): Promise<void> => {
+    const wrapEnabled = context.workspaceState.get<boolean>(wrapNonPySettingKey);
     const options: vscode.QuickPickItem[] = [
       { label: 'Select Compilation Method', description: 'Re-select compilation method' },
+      { label: 'Compile non-.py files (ON/OFF)', description: `Current: ${wrapEnabled === false ? 'OFF' : 'ON'}` },
       { label: 'Install Dependencies', description: 'Run dependency installation' }
     ];
     const selected = await vscode.window.showQuickPick(options, { placeHolder: 'Select an option' });
@@ -126,6 +131,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (selected.label === 'Select Compilation Method') {
       vscode.commands.executeCommand('mpytools.selectCompilationMethod');
+    } else if (selected.label === 'Compile non-.py files (ON/OFF)') {
+      vscode.commands.executeCommand('mpytools.selectNonPyCompilationMode');
     } else if (selected.label === 'Install Dependencies') {
       vscode.commands.executeCommand('mpytools.installDependencies');
     }
@@ -153,12 +160,38 @@ export function activate(context: vscode.ExtensionContext): void {
       const match = result.label.match(/Level (\d+)/);
       selectedCompilationMethod = match ? match[1] : '0';
     }
+    await context.workspaceState.update(compileMethodSettingKey, selectedCompilationMethod);
+    await context.workspaceState.update(compileSettingsDirtyKey, false);
     vscode.window.showInformationMessage(`Compilation method set to: ${selectedCompilationMethod === 'none' ? 'No Compilation' : 'Optimization O' + selectedCompilationMethod}`);
+  });
+
+  vscode.commands.registerCommand('mpytools.selectNonPyCompilationMode', async (): Promise<void> => {
+    const options: vscode.QuickPickItem[] = [
+      {
+        label: 'ON — Compile non-.py files',
+        description: 'Wrap common files (e.g. .html, .js, .css, .json, .txt) into .py and compile/upload'
+      },
+      {
+        label: 'OFF — Do not compile non-.py files',
+        description: 'Keep non-.py files as-is and upload them without wrapping/compiling'
+      }
+    ];
+    const result = await vscode.window.showQuickPick(options, {
+      placeHolder: 'Choose non-.py handling mode',
+      canPickMany: false
+    });
+    if (!result) {
+      return;
+    }
+    const shouldWrapNonPy = result.label === 'ON — Compile non-.py files';
+    await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
+    await context.workspaceState.update(compileSettingsDirtyKey, false);
+    vscode.window.showInformationMessage(`Compile non-.py files: ${shouldWrapNonPy ? 'ON' : 'OFF'}`);
   });
 
   // --- Оновлений код вибору порту з асинхронним скануванням ---
   let disposableSelectPort = vscode.commands.registerCommand('mpytools.selectPort', async (): Promise<void> => {
-    await context.workspaceState.update('mpytools.compileSettingsDirty', true);
+    await context.workspaceState.update(compileSettingsDirtyKey, true);
     vscode.window.terminals
       .filter(t => t.name.startsWith("MPY"))
       .forEach(t => t.dispose());
