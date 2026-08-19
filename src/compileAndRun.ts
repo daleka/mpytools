@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { exec } from 'child_process';
+import { prepareFirmwareVersion, saveFirmwareSnapshot } from './projectBuild';
  
 
 /**
@@ -147,6 +148,18 @@ export function registerCompileAndRunCommand(
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const srcPath = path.join(workspaceRoot, 'src');
     const mpyPath = path.join(workspaceRoot, 'mpy');
+
+    let preparedVersion;
+    try {
+      preparedVersion = await prepareFirmwareVersion(workspaceRoot, outputChannel);
+    } catch (error: any) {
+      const message = `Firmware version generation failed: ${error.message}`;
+      outputChannel.show(false);
+      logAndScroll(`❌ ${message}`);
+      vscode.window.showErrorMessage(message);
+      return;
+    }
+
     if (shouldResetMpyFolder && fs.existsSync(mpyPath)) {
       fs.rmSync(mpyPath, { recursive: true, force: true });
       logAndScroll("🗑 Cleared 'mpy' folder.");
@@ -352,6 +365,24 @@ export function registerCompileAndRunCommand(
         compileStatusBarItem.text = '$(rocket)Compile&Run';
         compileStatusBarItem.color = '#00BFFF';
         return;
+      }
+
+      if (preparedVersion) {
+        try {
+          const snapshot = saveFirmwareSnapshot(workspaceRoot, preparedVersion);
+          if (snapshot?.created) {
+            logAndScroll(`   🛟 Local build snapshot: ${snapshot.path}`);
+            vscode.window.showInformationMessage(
+              `Firmware ${preparedVersion.version} saved locally in .save/mpytools-builds.`
+            );
+          } else if (snapshot) {
+            logAndScroll(`   🛟 Local build snapshot already exists: ${snapshot.path}`);
+          }
+        } catch (error: any) {
+          const message = `Could not save local build snapshot: ${error.message}`;
+          logAndScroll(`   ⚠️ ${message}`);
+          vscode.window.showWarningMessage(message);
+        }
       }
 
       // 2.7 (Опційно) Оцінимо розмір скопійованої теки

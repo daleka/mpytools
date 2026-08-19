@@ -1,4 +1,25 @@
 MPyTools is a Visual Studio Code extension that simplifies working with MicroPython using mpremote. It automates compilation, uploading, and execution of code on a     microcontroller.  
+
+Project firmware versioning
+
+Projects can opt in with a `.mpytools.json` file:
+
+```json
+{
+  "versioning": {
+    "enabled": true,
+    "generator": "tools/generate_fw_version.py",
+    "output": "src/generated/fw_version.py",
+    "autoSnapshot": true,
+    "snapshotDirectory": ".save/mpytools-builds"
+  }
+}
+```
+
+Before `Compile & Run`, MPYTools runs the configured Python generator. A
+generation error stops the build. After a successful device upload, MPYTools
+stores one local source snapshot per firmware version so a tested build can be
+recovered even before it is pushed to Git.
     
     
 
@@ -83,6 +104,4 @@ MPyTools – це розширення для Visual Studio Code, яке спр�
     
         
             
-Буду радий будь-яким відгукам і пропозиціям!       
-       
-            
+Буду радий будь-яким відгукам і пропозиціям!
