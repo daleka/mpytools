@@ -34,13 +34,21 @@ The extension requires the following dependencies:
    
 Dependencies are automatically installed when running the "MPY: Install Dependencies" command for the first time.   
    
-Features   
-🔹 Automatic compilation & upload – Only modified .py files are compiled into .mpy, and only updated files are uploaded to the device.   
-🔹 Run code without copying – Execute .py files directly from the host machine.   
-🔹 Seamless integration with VS Code – Manage your microcontroller using status bar buttons.   
-🔹 Fast project backup – Easily archive your project into a .zip file.   
-🔹 Board support – Tested on STM32, expected to work with ESP32, RP2040 (but not verified yet).   
-🔹 Automatic installation of MicroPython Stubs – Adds autocompletion and type checking in VS Code (micropython-stubs).    
+Features
+
+🔹 Automatic compilation & upload – Only modified .py files are compiled into .mpy, and only updated files are uploaded to the device.
+
+🔹 Fast native compilation – Uses the native compiler from the installed `mpy_cross` package with safe bytecode-version selection and bounded parallel workers.
+
+🔹 Run code without copying – Execute .py files directly from the host machine.
+
+🔹 Seamless integration with VS Code – Manage your microcontroller using status bar buttons.
+
+🔹 Fast project backup – Easily archive your project into a .zip file.
+
+🔹 Board support – Tested on STM32, expected to work with ESP32, RP2040 (but not verified yet).
+
+🔹 Automatic installation of MicroPython Stubs – Adds autocompletion and type checking in VS Code (micropython-stubs).
    
   
     
@@ -80,13 +88,21 @@ MPyTools – це розширення для Visual Studio Code, яке спр�
 Залежності встановлюються автоматично під час першого запуску команди "MPY: Встановити залежності".    
      
              
-Можливості     
-🔹 Автоматична компіляція та завантаження – лише змінені .py файли компілюються в .mpy, і лише оновлені файли завантажуються на пристрій.   
-🔹 Запуск коду без копіювання – можна виконувати .py файли безпосередньо з ПК.   
-🔹 Зручна інтеграція у VS Code – керування мікроконтролером через кнопки у статус-барі.   
-🔹 Резервне копіювання – можливість швидко архівувати проєкт у .zip файл.   
-🔹 Підтримка плат – протестовано на STM32, очікується сумісність з ESP32, RP2040 (але поки що не перевірено).   
-🔹 Автоматичне встановлення MicroPython Stubs – додає автодоповнення та перевірку типів у VS Code (micropython-stubs).   
+Можливості
+
+🔹 Автоматична компіляція та завантаження – лише змінені .py файли компілюються в .mpy, і лише оновлені файли завантажуються на пристрій.
+
+🔹 Швидка нативна компіляція – використовується нативний компілятор із пакета `mpy_cross` із коректним вибором версії bytecode та обмеженою паралельною обробкою.
+
+🔹 Запуск коду без копіювання – можна виконувати .py файли безпосередньо з ПК.
+
+🔹 Зручна інтеграція у VS Code – керування мікроконтролером через кнопки у статус-барі.
+
+🔹 Резервне копіювання – можливість швидко архівувати проєкт у .zip файл.
+
+🔹 Підтримка плат – протестовано на STM32, очікується сумісність з ESP32, RP2040 (але поки що не перевірено).
+
+🔹 Автоматичне встановлення MicroPython Stubs – додає автодоповнення та перевірку типів у VS Code (micropython-stubs).
       
     
     

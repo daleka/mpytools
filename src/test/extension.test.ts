@@ -7,6 +7,13 @@ import * as path from 'path';
 // as well as import your extension to test it
 import * as vscode from 'vscode';
 import { readFirmwareVersion, saveFirmwareSnapshot } from '../projectBuild';
+import {
+	findExecutableOnPath,
+	findMpyCrossArchiveVersion,
+	findMpyCrossPackageRootsNearLauncher,
+	listNativeMpyCrossCandidates,
+	parseMpyCrossBytecodeVersion
+} from '../mpyCross';
 // import * as myExtension from '../../extension';
 
 suite('Extension Test Suite', () => {
@@ -53,5 +60,54 @@ suite('Extension Test Suite', () => {
 		} finally {
 			fs.rmSync(temporaryRoot, { recursive: true, force: true });
 		}
+	});
+
+	test('Finds a Windows mpy-cross launcher on PATH', () => {
+		const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mpytools-path-'));
+		try {
+			const launcher = path.join(temporaryRoot, 'mpy-cross.EXE');
+			fs.writeFileSync(launcher, '');
+			assert.strictEqual(
+				findExecutableOnPath('mpy-cross', temporaryRoot, 'win32', '.EXE'),
+				fs.realpathSync.native(launcher)
+			);
+		} finally {
+			fs.rmSync(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	test('Finds native mpy-cross binaries beside a pip launcher', () => {
+		const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mpytools-native-'));
+		try {
+			const scriptsRoot = path.join(temporaryRoot, 'Python313', 'Scripts');
+			const packageRoot = path.join(temporaryRoot, 'Python313', 'Lib', 'site-packages', 'mpy_cross');
+			const archiveRoot = path.join(packageRoot, 'archive', 'v1.23.0');
+			const binaryName = process.platform === 'win32' ? 'mpy-cross.exe' : 'mpy-cross';
+			const launcher = path.join(scriptsRoot, binaryName);
+			const currentBinary = path.join(packageRoot, binaryName);
+			const archivedBinary = path.join(archiveRoot, binaryName);
+			const versionsFile = path.join(packageRoot, 'versions.py');
+			fs.mkdirSync(scriptsRoot, { recursive: true });
+			fs.mkdirSync(archiveRoot, { recursive: true });
+			fs.writeFileSync(launcher, '');
+			fs.writeFileSync(currentBinary, '');
+			fs.writeFileSync(archivedBinary, '');
+			fs.writeFileSync(versionsFile, '__versions__ = [("v1.23.0", "6.3")]\n');
+
+			assert.deepStrictEqual(findMpyCrossPackageRootsNearLauncher(launcher), [packageRoot]);
+			assert.deepStrictEqual(listNativeMpyCrossCandidates(packageRoot), [currentBinary, archivedBinary]);
+			assert.strictEqual(findMpyCrossArchiveVersion(packageRoot, 6.3), 'v1.23.0');
+			assert.strictEqual(findMpyCrossArchiveVersion(packageRoot, 6.2), undefined);
+		} finally {
+			fs.rmSync(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	test('Reads the emitted bytecode version from mpy-cross output', () => {
+		assert.strictEqual(
+			parseMpyCrossBytecodeVersion('MicroPython v1.24.1; mpy-cross emitting mpy v6.3'),
+			'6.3'
+		);
+		assert.strictEqual(parseMpyCrossBytecodeVersion('unexpected output'), undefined);
 	});
 });

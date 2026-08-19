@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, exec } from 'child_process';
+import { resetMpyCrossResolver, resolveMpyCrossTarget } from './mpyCross';
  
 /**
  * Реєструє команду "mpytools.installDependencies".
@@ -104,9 +105,18 @@ export function registerDependenciesCommand(
           // Якщо exitCode == 0, вважаємо, що інсталяція пройшла успішно
           if (exitCode === 0) {
             outputChannel.appendLine("✅ Dependencies installed.");
+            resetMpyCrossResolver();
             // Переходимо до встановлення локальних заглушок
             installLocalMicropythonStubs(outputChannel)
-              .then(() => {
+              .then(async () => {
+                try {
+                  const compiler = await resolveMpyCrossTarget();
+                  outputChannel.appendLine(
+                    `✅ mpy-cross ready: ${compiler.mode} ${compiler.executable}`
+                  );
+                } catch (compilerError: any) {
+                  throw new Error(`mpy-cross validation failed: ${compilerError.message}`);
+                }
                 vscode.window.showInformationMessage("✅ Dependencies installed successfully!");
                 outputChannel.appendLine("✅ Installation completed.");
                 // Пропонуємо перезавантажити VSCode

@@ -20,6 +20,7 @@ import { prepareFirmwareVersion, saveFirmwareSnapshot } from './projectBuild';
  * @param setSelectedMethod     - функція-сетер для export function registerCompileAndRunCommand(
  * @param needsRecompile        - функція перевірки потреби перекомпіляції
  * @param compilePyFile         - функція компіляції одного .py у .mpy
+ * @param compileFileToOutput   - функція компіляції у вказаний вихідний файл
  * @param findPyFiles           - функція пошуку .py в папці src
  * @param openTerminalAndRunMain - функція запуску main (mpremote connect ... + repl)
  * @param formatPort            - функція форматування порту
@@ -40,6 +41,7 @@ export function registerCompileAndRunCommand(
   setSelectedMethod: (val: string | undefined) => void,
   needsRecompile: (pyFilePath: string, srcPath: string, mpyPath: string) => boolean,
   compilePyFile: (pyFilePath: string, srcPath: string, mpyPath: string) => Promise<string>,
+  compileFileToOutput: (sourcePath: string, outPath: string) => Promise<string>,
   findPyFiles: (rootDir: string, ignoreList?: string[]) => string[],
   openTerminalAndRunMain: (port: string, debugTerminal: vscode.Terminal) => Promise<void>,
   formatPort: (port: string) => string,
@@ -219,59 +221,76 @@ export function registerCompileAndRunCommand(
         })(srcPath);
         logAndScroll(`   🔹 Found ${allFiles.length} total files in "src".`);
 
-        // Обробляємо кожен файл: компіляція для .py, обгортка+компіляція для інших
-        for (let i = 0; i < allFiles.length; i++) {
-          const filePath = allFiles[i];
-          const shortName = path.relative(workspaceRoot, filePath);
-          const extName = path.extname(filePath).toLowerCase();
+        const pythonFiles = allFiles.filter((filePath) => path.extname(filePath).toLowerCase() === '.py');
+        const nonPythonFiles = allFiles.filter((filePath) => path.extname(filePath).toLowerCase() !== '.py');
+        const pythonFilesToCompile: string[] = [];
 
-          if (extName === '.py') {
-            if (needsRecompile(filePath, srcPath, mpyPath)) {
-              progress.report({ message: `Compiling: ${shortName}` });
-              logAndScroll(`   🔹 Compiling: ${shortName}`);
+        for (const filePath of pythonFiles) {
+          const shortName = path.relative(workspaceRoot, filePath);
+          if (needsRecompile(filePath, srcPath, mpyPath)) {
+            pythonFilesToCompile.push(filePath);
+          } else {
+            logAndScroll(`   🔹 Skipped (unchanged .py): ${shortName}`);
+            logAndScroll("");
+          }
+        }
+
+        const compileConcurrency = Math.max(1, Math.min(4, os.cpus().length));
+        if (pythonFilesToCompile.length > 0) {
+          logAndScroll(
+            `   ⚡ Compiling ${pythonFilesToCompile.length} .py files with up to ${compileConcurrency} native workers.`
+          );
+        }
+        await forEachWithConcurrency(
+          pythonFilesToCompile,
+          compileConcurrency,
+          async (filePath) => {
+            const shortName = path.relative(workspaceRoot, filePath);
+            progress.report({ message: `Compiling: ${shortName}` });
+            logAndScroll(`   🔹 Compiling: ${shortName}`);
+            try {
+              await compilePyFile(filePath, srcPath, mpyPath);
+              compiledCount++;
+              logAndScroll(`      ✅ OK: ${shortName}`);
+            } catch (err: any) {
+              vscode.window.showWarningMessage(`Compilation error: ${shortName}\n${err}`);
+              logAndScroll(`      ❌ Compilation error: ${shortName} -> ${err.message}`);
+            }
+            logAndScroll("");
+          }
+        );
+
+        // Assets remain sequential: different extensions may intentionally map to the same wrapper name.
+        for (const filePath of nonPythonFiles) {
+          const shortName = path.relative(workspaceRoot, filePath);
+          if (shouldWrapNonPy) {
+            const outAssetPath = getAssetOutputPath(filePath, srcPath, mpyPath);
+            const shouldWrap = needsAssetRecompile(filePath, outAssetPath);
+            if (shouldWrap) {
+              progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
+              logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
               try {
-                await compilePyFile(filePath, srcPath, mpyPath);
-                compiledCount++;
-                logAndScroll(`      ✅ OK: ${shortName}`);
+                await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, compileFileToOutput);
+                wrappedNonPyCount++;
+                logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
+                logAndScroll(`      ℹ️ Wrapper: ${path.relative(workspaceRoot, getAssetWrapperPyPath(filePath, srcPath))}`);
               } catch (err: any) {
-                vscode.window.showWarningMessage(`Compilation error: ${shortName}\n${err}`);
-                logAndScroll(`      ❌ Compilation error: ${shortName} -> ${err.message}`);
+                vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
+                logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
               }
-              logAndScroll("");
             } else {
-              logAndScroll(`   🔹 Skipped (unchanged .py): ${shortName}`);
-              logAndScroll("");
+              logAndScroll(`   🔹 Skipped (unchanged wrapped asset): ${shortName}`);
             }
           } else {
-            if (shouldWrapNonPy) {
-              const outAssetPath = getAssetOutputPath(filePath, srcPath, mpyPath);
-              const shouldWrap = needsAssetRecompile(filePath, outAssetPath);
-              if (shouldWrap) {
-                progress.report({ message: `Wrapping+compiling asset: ${shortName}` });
-                logAndScroll(`   🔹 Wrapping+compiling asset: ${shortName}`);
-                try {
-                  await compileNonPyFileAsAsset(filePath, srcPath, mpyPath, execPromise);
-                  wrappedNonPyCount++;
-                  logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
-                  logAndScroll(`      ℹ️ Wrapper: ${path.relative(workspaceRoot, getAssetWrapperPyPath(filePath, srcPath))}`);
-                } catch (err: any) {
-                  vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
-                  logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
-                }
-              } else {
-                logAndScroll(`   🔹 Skipped (unchanged wrapped asset): ${shortName}`);
-              }
+            const outRawPath = getRawOutputPath(filePath, srcPath, mpyPath);
+            if (needsFileCopy(filePath, outRawPath)) {
+              progress.report({ message: `Copying raw asset: ${shortName}` });
+              logAndScroll(`   🔹 Copying raw asset: ${shortName}`);
+              copyWithMkDir(filePath, outRawPath);
+              copiedNonPyCount++;
+              logAndScroll(`      ✅ OK: ${shortName}`);
             } else {
-              const outRawPath = getRawOutputPath(filePath, srcPath, mpyPath);
-              if (needsFileCopy(filePath, outRawPath)) {
-                progress.report({ message: `Copying raw asset: ${shortName}` });
-                logAndScroll(`   🔹 Copying raw asset: ${shortName}`);
-                copyWithMkDir(filePath, outRawPath);
-                copiedNonPyCount++;
-                logAndScroll(`      ✅ OK: ${shortName}`);
-              } else {
-                logAndScroll(`   🔹 Skipped (unchanged raw asset): ${shortName}`);
-              }
+              logAndScroll(`   🔹 Skipped (unchanged raw asset): ${shortName}`);
             }
             logAndScroll("");
           }
@@ -412,6 +431,25 @@ export function registerCompileAndRunCommand(
   return compileStatusBarItem;
 }
 
+async function forEachWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  async function runWorker(): Promise<void> {
+    while (true) {
+      const currentIndex = nextIndex++;
+      if (currentIndex >= items.length) {
+        return;
+      }
+      await worker(items[currentIndex]);
+    }
+  }
+  const workerCount = Math.min(items.length, Math.max(1, concurrency));
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+}
+
 /**
  * Копіює файл із `srcFile` у `destFile`, створюючи проміжні директорії за потреби.
  */
@@ -513,14 +551,14 @@ async function compileNonPyFileAsAsset(
   filePath: string,
   srcPath: string,
   mpyPath: string,
-  execPromise: (cmd: string) => Promise<string>
+  compileFileToOutput: (sourcePath: string, outPath: string) => Promise<string>
 ): Promise<string> {
   const source = fs.readFileSync(filePath);
   const outPath = getAssetOutputPath(filePath, srcPath, mpyPath);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   const wrapperPyPath = getAssetWrapperPyPath(filePath, srcPath);
   await writeNonPyAssetPy(filePath, srcPath, wrapperPyPath);
-  await execPromise(`mpy-cross "${wrapperPyPath}" -o "${outPath}"`);
+  await compileFileToOutput(wrapperPyPath, outPath);
   return outPath;
 }
 

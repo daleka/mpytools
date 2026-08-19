@@ -10,6 +10,7 @@ import { registerSaveProjectCommand } from './saveProject';
 import { registerCompileAndRunCommand } from './compileAndRun';
 import { registerFileManager } from './fileManager';
 import { setSelectedPort as setSharedSelectedPort } from './sharedState';
+import { formatMpyCrossInvocation, runMpyCross } from './mpyCross';
 
 // Вікно логу
 export const mpyOutputChannel = vscode.window.createOutputChannel("MPyTools Log");
@@ -388,6 +389,7 @@ export function activate(context: vscode.ExtensionContext): void {
     (val: string | undefined) => { selectedCompilationMethod = val; },
     needsRecompile,
     compilePyFile,
+    compileFileToOutput,
     findPyFiles,
     openTerminalAndRunMain,
     formatPort,
@@ -624,49 +626,47 @@ async function compilePyFile(
   srcPath: string,
   mpyPath: string
 ): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const relative = path.relative(srcPath, pyFilePath);
-    const outPath = path.join(mpyPath, relative.replace(/\.py$/, '.mpy'));
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  const relative = path.relative(srcPath, pyFilePath);
+  const outPath = path.join(mpyPath, relative.replace(/\.py$/, '.mpy'));
+  return compileFileToOutput(pyFilePath, outPath);
+}
 
-    const archFlag = micropythonArchitecture ? `-march=${micropythonArchitecture}` : '';
-    const smallIntFlag = micropythonMsmallIntBits ? `-msmall-int-bits=${micropythonMsmallIntBits}` : '';
-    const optimizationFlag = selectedCompilationMethod ? `-O${selectedCompilationMethod}` : '';
+/** Compile one source file using the package's native binary whenever possible. */
+async function compileFileToOutput(sourcePath: string, outPath: string): Promise<string> {
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
-    const bytecodeVersion = getSupportedBytecodeVersion(micropythonVersion);
-    let versionFlag = '';
-    if (bytecodeVersion !== undefined) {
-      versionFlag = `-b ${bytecodeVersion}`;
-    } else {
-      mpyOutputChannel.appendLine("⚠️ Warning: Bytecode not supported for this version of MicroPython. Skipping -b flag.");
-    }
+  const args: string[] = [];
+  if (micropythonArchitecture) {
+    args.push(`-march=${micropythonArchitecture}`);
+  } else {
+    mpyOutputChannel.appendLine("⚠️ Warning: micropythonArchitecture not obtained. Omitting -march flag.");
+  }
+  if (micropythonMsmallIntBits) {
+    args.push(`-msmall-int-bits=${micropythonMsmallIntBits}`);
+  } else {
+    mpyOutputChannel.appendLine("⚠️ Warning: micropythonMsmallIntBits not obtained. Omitting -msmall-int-bits flag.");
+  }
+  if (selectedCompilationMethod) {
+    args.push(`-O${selectedCompilationMethod}`);
+  }
+  args.push(sourcePath, '-o', outPath);
 
-    const cmd = `mpy-cross ${archFlag} ${smallIntFlag} ${optimizationFlag} ${versionFlag} "${pyFilePath}" -o "${outPath}"`
-      .replace(/\s+/g, ' ')
-      .trim();
+  const bytecodeVersion = getSupportedBytecodeVersion(micropythonVersion);
+  if (bytecodeVersion === undefined) {
+    mpyOutputChannel.appendLine("⚠️ Warning: Bytecode not supported for this version of MicroPython. Using the current mpy-cross bytecode.");
+  }
 
-    mpyOutputChannel.appendLine(`⚙️ Running mpy-cross command: ${cmd}`);
-    if (!micropythonArchitecture) {
-      mpyOutputChannel.appendLine("⚠️ Warning: micropythonArchitecture not obtained. Omitting -march flag.");
-    }
-    if (!micropythonMsmallIntBits) {
-      mpyOutputChannel.appendLine("⚠️ Warning: micropythonMsmallIntBits not obtained. Omitting -msmall-int-bits flag.");
-    }
-
-    exec(cmd, (error, stdout, stderr) => {
-      if (stdout && stdout.trim()) {
-        console.log(`[mpy-cross stdout] ${stdout.trim()}`);
-      }
-      if (stderr && stderr.trim()) {
-        console.error(`[mpy-cross stderr] ${stderr.trim()}`);
-      }
-      if (error) {
-        reject(error);
-      } else {
-        resolve(outPath);
-      }
-    });
-  });
+  const result = await runMpyCross(args, bytecodeVersion);
+  mpyOutputChannel.appendLine(
+    `⚙️ mpy-cross [${result.target.mode}, ${result.durationMs.toFixed(1)} ms]: ${formatMpyCrossInvocation(result)}`
+  );
+  if (result.stdout.trim()) {
+    console.log(`[mpy-cross stdout] ${result.stdout.trim()}`);
+  }
+  if (result.stderr.trim()) {
+    console.error(`[mpy-cross stderr] ${result.stderr.trim()}`);
+  }
+  return outPath;
 }
 
 /**
