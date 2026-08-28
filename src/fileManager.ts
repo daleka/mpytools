@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
-import { exec } from 'child_process';
  
 import { mpyOutputChannel } from './extension';
 import { micropythonSysName } from './extension';
-import { getSelectedPort as getSharedSelectedPort } from './sharedState';
+import { DeviceSession } from './deviceSession';
+import { parseFileSystemEntry } from './deviceFiles';
+
+let activeDeviceSession: DeviceSession | undefined;
+let deviceFileStorageRoot: string | undefined;
 
 /** Нормалізація пристроєвого шляху – забезпечуємо, що шлях починається з "/" */
 function normalizeDevicePath(p: string): string {
@@ -32,13 +34,15 @@ function getRemoteFilePath(p: string): string {
 
 /** Функція для отримання вибраного порту */
 function getSelectedPort(): string {
-  return getSharedSelectedPort() || 'auto';
+  return requireDeviceSession().currentPort();
 }
 
 /** Глобальна мапа для збереження відповідності тимчасового файлу та реального device-шляху */
 const deviceFileMap: Map<string, string> = new Map<string, string>();
 
-export function registerFileManager(context: vscode.ExtensionContext): void {
+export function registerFileManager(context: vscode.ExtensionContext, deviceSession: DeviceSession): void {
+  activeDeviceSession = deviceSession;
+  deviceFileStorageRoot = path.join((context.storageUri ?? context.globalStorageUri).fsPath, 'device-files');
   const provider: FileManagerProvider = new FileManagerProvider();
 
   // Створення TreeView (тільки для пристрою)
@@ -47,20 +51,17 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(treeView);
 
-  // Глобальний refresh дерева
-  context.subscriptions.push(
-    vscode.commands.registerCommand('mpytoolsFileExplorer.refresh', () => {
-      provider.refresh();
-    })
-  );
-
-  // "Refresh device" – оновлення дерева пристрою
-  context.subscriptions.push(
-    vscode.commands.registerCommand('mpytoolsFileExplorer.refreshDevice', (item: FileItem) => {
+  const refreshItem = (item?: FileItem): void => {
+    if (item) {
       item.isLoaded = false;
       item.cachedChildren = undefined;
-      provider.refresh(item);
-    })
+    }
+    provider.refresh(item);
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mpytoolsFileExplorer.refresh', () => refreshItem()),
+    vscode.commands.registerCommand('mpytoolsFileExplorer.refreshDevice', refreshItem),
+    vscode.commands.registerCommand('mpytoolsFileExplorer.refreshFolder', refreshItem)
   );
 
   // Відкрити файл з пристрою
@@ -77,10 +78,11 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
   );
 
   // Завантаження файлів з пристрою при збереженні (автоматичне завантаження назад на пристрій)
-  vscode.workspace.onDidSaveTextDocument(async (document: vscode.TextDocument) => {
-    const localPath = path.normalize(document.uri.fsPath).toLowerCase();
-    if (deviceFileMap.has(localPath)) {
-      const devicePath = deviceFileMap.get(localPath)!;
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(async (document: vscode.TextDocument) => {
+    const localPath = document.uri.fsPath;
+    const localKey = canonicalLocalPath(localPath);
+    if (deviceFileMap.has(localKey)) {
+      const devicePath = deviceFileMap.get(localKey)!;
       try {
         await uploadDeviceFile(localPath, devicePath);
         mpyOutputChannel.appendLine(`✅ Uploaded file to device: ${devicePath}`);
@@ -88,16 +90,16 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`Failed to upload ${localPath} to device: ${err.message}`);
       }
     }
-  });
+  }));
 
   // Видалення мапування при закритті документа
-  vscode.workspace.onDidCloseTextDocument((document: vscode.TextDocument) => {
-    const localPath = path.normalize(document.uri.fsPath).toLowerCase();
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document: vscode.TextDocument) => {
+    const localPath = canonicalLocalPath(document.uri.fsPath);
     if (deviceFileMap.has(localPath)) {
       deviceFileMap.delete(localPath);
-      mpyOutputChannel.appendLine(`🔗 Mapping removed for closed file: ${localPath}`);
+      mpyOutputChannel.appendLine(`🔗 Mapping removed for closed file: ${document.uri.fsPath}`);
     }
-  });
+  }));
 
   // ===== Команди для роботи з файлами/папками пристрою =====
 
@@ -106,12 +108,14 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('mpytoolsFileExplorer.createDeviceFile', async (item: FileItem) => {
       const fileName = await vscode.window.showInputBox({ prompt: 'Enter new file name' });
       if (!fileName) { return; }
+      if (!isValidDeviceEntryName(fileName)) {
+        vscode.window.showErrorMessage('File name must be one name without /, \\, NUL, . or ...');
+        return;
+      }
       const basePath = item.fullPath ? normalizeDevicePath(item.fullPath) : '/';
       const newFilePath = path.join(basePath, fileName).replace(/\\/g, '/');
-      const port = getSelectedPort();
-      const command = `mpremote connect ${port} fs touch ${getRemoteFilePath(newFilePath)}`;
       try {
-        await execPromise(command);
+        await runMpremote(['fs', 'touch', getRemoteFilePath(newFilePath)]);
         mpyOutputChannel.appendLine(`✅ Created file: ${newFilePath}`);
         provider.refresh(item);
       } catch (error: any) {
@@ -125,12 +129,14 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('mpytoolsFileExplorer.createDeviceFolder', async (item: FileItem) => {
       const folderName = await vscode.window.showInputBox({ prompt: 'Enter new folder name' });
       if (!folderName) { return; }
+      if (!isValidDeviceEntryName(folderName)) {
+        vscode.window.showErrorMessage('Folder name must be one name without /, \\, NUL, . or ...');
+        return;
+      }
       const basePath = item.fullPath ? normalizeDevicePath(item.fullPath) : '/';
       const newFolderPath = path.join(basePath, folderName).replace(/\\/g, '/');
-      const port = getSelectedPort();
-      const command = `mpremote connect ${port} fs mkdir ${getRemoteFilePath(newFolderPath)}`;
       try {
-        await execPromise(command);
+        await runMpremote(['fs', 'mkdir', getRemoteFilePath(newFolderPath)]);
         mpyOutputChannel.appendLine(`✅ Created folder: ${newFolderPath}`);
         provider.refresh(item);
       } catch (error: any) {
@@ -145,15 +151,16 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
       const currentName = path.basename(item.fullPath || '');
       const newName = await vscode.window.showInputBox({ prompt: 'Enter new file name', value: currentName });
       if (!newName) { return; }
+      if (!isValidDeviceEntryName(newName)) {
+        vscode.window.showErrorMessage('File name must be one name without /, \\, NUL, . or ...');
+        return;
+      }
       const parentPath = item.fullPath ? path.dirname(normalizeDevicePath(item.fullPath)) : '/';
       const newPath = path.join(parentPath, newName).replace(/\\/g, '/');
-      const port = getSelectedPort();
-      const copyCommand = `mpremote connect ${port} fs cp ${getRemoteFilePath(item.fullPath!)} ${getRemoteFilePath(newPath)}`;
-      const removeCommand = `mpremote connect ${port} fs rm ${getRemoteFilePath(item.fullPath!)}`;
       try {
-        await execPromise(copyCommand);
+        await runMpremote(['fs', 'cp', getRemoteFilePath(item.fullPath!), getRemoteFilePath(newPath)]);
         mpyOutputChannel.appendLine(`✅ Copied file to: ${newPath}`);
-        await execPromise(removeCommand);
+        await runMpremote(['fs', 'rm', getRemoteFilePath(item.fullPath!)]);
         mpyOutputChannel.appendLine(`✅ Removed old file: ${item.fullPath}`);
         provider.refresh();
       } catch (error: any) {
@@ -171,10 +178,8 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
         'Yes'
       );
       if (confirm !== 'Yes') { return; }
-      const port = getSelectedPort();
-      const command = `mpremote connect ${port} fs rm ${getRemoteFilePath(item.fullPath!)}`;
       try {
-        await execPromise(command);
+        await runMpremote(['fs', 'rm', getRemoteFilePath(item.fullPath!)]);
         mpyOutputChannel.appendLine(`✅ Deleted device file: ${item.fullPath}`);
         provider.refresh();
       } catch (error: any) {
@@ -195,7 +200,13 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
       const workspaceRoot = workspaceFolders[0].uri.fsPath;
       const relativeDevicePath = item.fullPath.replace(/^\//, '');
       // Файли пристрою зберігаються в окремій папці "device" всередині робочої області
-      const destPath = path.join(workspaceRoot, 'device', relativeDevicePath);
+      const deviceRoot = path.join(workspaceRoot, 'device');
+      const destPath = path.resolve(deviceRoot, relativeDevicePath);
+      const relativeDestination = path.relative(deviceRoot, destPath);
+      if (relativeDestination.startsWith('..') || path.isAbsolute(relativeDestination)) {
+        vscode.window.showErrorMessage(`Device path escapes the local device folder: ${item.fullPath}`);
+        return;
+      }
       const destDir = path.dirname(destPath);
       if (!fs.existsSync(destDir)) {
         fs.mkdirSync(destDir, { recursive: true });
@@ -210,10 +221,8 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
           return;
         }
       }
-      const port = getSelectedPort();
-      const command = `mpremote connect ${port} fs cp ${getRemoteFilePath(item.fullPath)} ${destPath}`;
       try {
-        await execPromise(command);
+        await runMpremote(['fs', 'cp', getRemoteFilePath(item.fullPath), destPath]);
         mpyOutputChannel.appendLine(`✅ Sent device file to local project: ${destPath}`);
       } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to send device file to local project: ${error.message}`);
@@ -241,10 +250,9 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
   );
 
   // Команда "Заміряти пам'ять"
-  vscode.commands.registerCommand('mpytoolsFileExplorer.measureDeviceSpace', async (item: FileItem) => {
-    const port = getSelectedPort();
+  context.subscriptions.push(vscode.commands.registerCommand('mpytoolsFileExplorer.measureDeviceSpace', async (item?: FileItem) => {
     try {
-      const output = await execPromise(`mpremote connect ${port} df`);
+      const output = await runMpremote(['df']);
       mpyOutputChannel.appendLine(`Raw df output: ${output}`);
       const lines = output.split('\n').map(line => line.trim()).filter(line => line.length > 0);
       let dfLine: string | undefined = lines.find(line => {
@@ -271,12 +279,16 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
       } else {
         description = output;
       }
-      item.description = description;
+      if (item) {
+        item.description = description;
+        provider.refresh(item);
+      }
       mpyOutputChannel.appendLine(`✅ Device space: ${description}`);
+      vscode.window.showInformationMessage(`Device space: ${description}`);
     } catch (error: any) {
       vscode.window.showErrorMessage(`Failed to measure device space: ${error.message}`);
     }
-  });
+  }));
 
   // Команда "Очистити пристрій"
   context.subscriptions.push(
@@ -290,7 +302,7 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
       try {
         await clearDevice();
         mpyOutputChannel.appendLine(`✅ Device cleared.`);
-        vscode.commands.executeCommand('mpytoolsFileExplorer.refreshDevice', item);
+        await vscode.commands.executeCommand('mpytoolsFileExplorer.refreshDevice', item);
       } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to clear device: ${error.message}`);
       }
@@ -301,9 +313,10 @@ export function registerFileManager(context: vscode.ExtensionContext): void {
 /** Функція відкриття файлу з пристрою */
 async function openDeviceFile(fileItem: FileItem): Promise<void> {
   const devicePath: string = fileItem.fullPath!;
-  const port: string = getSelectedPort();
-
-  const temporaryDirectory: string = path.join(os.tmpdir(), 'mpytools_temp');
+  const temporaryDirectory = deviceFileStorageRoot;
+  if (!temporaryDirectory) {
+    throw new Error('MPyTools device-file storage is not initialized.');
+  }
   if (!fs.existsSync(temporaryDirectory)) {
     fs.mkdirSync(temporaryDirectory, { recursive: true });
   }
@@ -319,16 +332,14 @@ async function openDeviceFile(fileItem: FileItem): Promise<void> {
   const document: vscode.TextDocument = await vscode.workspace.openTextDocument(temporaryFilePath);
   await vscode.window.showTextDocument(document, { preview: false });
 
-  const canonicalTemporaryPath = path.normalize(temporaryFilePath).toLowerCase();
+  const canonicalTemporaryPath = canonicalLocalPath(temporaryFilePath);
   deviceFileMap.set(canonicalTemporaryPath, devicePath);
   mpyOutputChannel.appendLine(`🔗 Mapping set: ${canonicalTemporaryPath} -> ${devicePath}`);
 }
 
 async function downloadDeviceFile(devicePath: string, localPath: string): Promise<void> {
-  const port: string = getSelectedPort();
-  const command: string = `mpremote connect ${port} fs cp :${devicePath} ${localPath}`;
   try {
-    await execPromise(command);
+    await runMpremote(['fs', 'cp', getRemoteFilePath(devicePath), localPath]);
     mpyOutputChannel.appendLine(`⬇️ Download complete: ${localPath}`);
   } catch (error: any) {
     throw error;
@@ -336,10 +347,8 @@ async function downloadDeviceFile(devicePath: string, localPath: string): Promis
 }
 
 async function uploadDeviceFile(localPath: string, devicePath: string): Promise<void> {
-  const port: string = getSelectedPort();
-  const command: string = `mpremote connect ${port} fs cp -f ${localPath} :${devicePath}`;
   try {
-    await execPromise(command);
+    await runMpremote(['fs', 'cp', '-f', localPath, getRemoteFilePath(devicePath)]);
     mpyOutputChannel.appendLine(`⬆️ Upload complete: ${localPath} to ${devicePath}`);
   } catch (error: any) {
     throw error;
@@ -348,54 +357,45 @@ async function uploadDeviceFile(localPath: string, devicePath: string): Promise<
 
 /** Рекурсивне видалення папки на пристрої з детальним логуванням */
 async function deleteDeviceFolderRecursively(folderPath: string): Promise<void> {
-  const port = getSelectedPort();
-  const listCommand = `mpremote connect ${port} fs ls ${getRemoteFilePath(folderPath)}`;
   let output: string;
   try {
-    output = await execPromise(listCommand);
+    output = await runMpremote(['fs', 'ls', getRemoteFilePath(folderPath)]);
   } catch (err: any) {
     throw new Error(`Failed to list folder contents: ${err.message}`);
   }
   const lines = output.split('\n').map(line => line.trim()).filter(line => line !== '' && !line.startsWith('ls :'));
   for (const line of lines) {
-    const parts = line.split(/\s+/, 2);
-    if (parts.length < 2) {
+    const entry = parseFileSystemEntry(line);
+    if (!entry) {
       continue;
     }
-    let entryName = parts[1];
-    const isDir = entryName.endsWith('/');
-    if (isDir) {
-      entryName = entryName.replace(/\/+$/, '');
+    const { name: entryName, isDirectory: isDir } = entry;
+    if (!isValidDeviceEntryName(entryName)) {
+      mpyOutputChannel.appendLine(`⚠️ Ignoring unsafe device entry: ${JSON.stringify(entryName)}`);
+      continue;
     }
     const childPath = folderPath.endsWith('/') ? folderPath + entryName : folderPath + '/' + entryName;
     if (isDir) {
       await deleteDeviceFolderRecursively(childPath);
     } else {
       mpyOutputChannel.appendLine(`Deleting file: ${childPath}`);
-      await execPromise(`mpremote connect ${port} fs rm ${getRemoteFilePath(childPath)}`);
+      await runMpremote(['fs', 'rm', getRemoteFilePath(childPath)]);
       mpyOutputChannel.appendLine(`Deleted file: ${childPath}`);
     }
   }
   mpyOutputChannel.appendLine(`Deleting folder: ${folderPath}`);
-  await execPromise(`mpremote connect ${port} fs rmdir ${getRemoteFilePath(folderPath)}`);
+  await runMpremote(['fs', 'rmdir', getRemoteFilePath(folderPath)]);
   mpyOutputChannel.appendLine(`Deleted folder: ${folderPath}`);
 }
 
 /** Функція для очищення пристрою (видалення ВСЬОГО в корені) */
 async function clearDevice(): Promise<void> {
-  // Закриваємо всі активні MPY термінали
-  const terminals: vscode.Terminal[] = vscode.window.terminals.filter(terminal => terminal.name.startsWith('MPY'));
-  terminals.forEach(terminal => terminal.dispose());
-  await new Promise(resolve => setTimeout(resolve, 300));
-
-  const port = getSelectedPort();
   // Якщо пристрій є Pyboard, використовуємо '/flash/' (з фінальним слешем) як корінь
   const isPyboard = micropythonSysName && micropythonSysName.toLowerCase().includes("pyboard");
   const rootPath = isPyboard ? '/flash/' : '/';
-  const listCommand = `mpremote connect ${port} fs ls ${getRemoteFilePath(rootPath) || ':'}`;
   let output: string;
   try {
-    output = await execPromise(listCommand);
+    output = await runMpremote(['fs', 'ls', getRemoteFilePath(rootPath) || ':']);
   } catch (error: any) {
     throw new Error(`Failed to list device root: ${error.message}`);
   }
@@ -404,13 +404,15 @@ async function clearDevice(): Promise<void> {
     .map(line => line.trim())
     .filter(line => line !== '' && !line.startsWith('ls :'));
   for (const line of lines) {
-    const parts = line.split(/\s+/, 2);
-    if (parts.length < 2) {
+    const entry = parseFileSystemEntry(line);
+    if (!entry) {
       continue;
     }
-    // Видаляємо зайві слеші
-    let entryName = parts[1].replace(/\/+$/, '');
-    const isDir = parts[1].endsWith('/');
+    const { name: entryName, isDirectory: isDir } = entry;
+    if (!isValidDeviceEntryName(entryName)) {
+      mpyOutputChannel.appendLine(`⚠️ Ignoring unsafe device entry: ${JSON.stringify(entryName)}`);
+      continue;
+    }
     
     // Якщо файл називається "System" (без врахування регістру), пропускаємо його
     if (!isDir && entryName.toLowerCase() === 'system') {
@@ -424,7 +426,7 @@ async function clearDevice(): Promise<void> {
       await deleteDeviceFolderRecursively(fullEntryPath);
     } else {
       mpyOutputChannel.appendLine(`Deleting file: ${fullEntryPath}`);
-      await execPromise(`mpremote connect ${port} fs rm ${getRemoteFilePath(fullEntryPath)}`);
+      await runMpremote(['fs', 'rm', getRemoteFilePath(fullEntryPath)]);
       mpyOutputChannel.appendLine(`Deleted file: ${fullEntryPath}`);
     }
   }
@@ -449,7 +451,7 @@ class FileManagerProvider implements vscode.TreeDataProvider<FileItem> {
   public async getChildren(element?: FileItem): Promise<FileItem[]> {
     if (!element) {
       // Якщо порт не вибраний або дорівнює 'auto', повертаємо елемент для вибору порту
-      if (getSelectedPort() === 'auto' || !getSharedSelectedPort()) {
+      if (getSelectedPort() === 'auto') {
         const selectPortItem = new FileItem("🔌 Select Port", vscode.TreeItemCollapsibleState.None, 'select-port');
         selectPortItem.command = {
           command: 'mpytools.selectPort',
@@ -495,18 +497,10 @@ class FileManagerProvider implements vscode.TreeDataProvider<FileItem> {
   }
 
   private async readDeviceDirectory(deviceDirectoryPath: string, baseContextValue: string): Promise<FileItem[]> {
-    const port: string = getSelectedPort();
-    if (!port) {
-      return [];
-    }
-    const terminals: vscode.Terminal[] = vscode.window.terminals.filter(terminal => terminal.name.startsWith('MPY'));
-    terminals.forEach(terminal => terminal.dispose());
-    await new Promise(resolve => setTimeout(resolve, 300));
     mpyOutputChannel.show(true);
-    const commandForListing: string = `mpremote connect ${port} fs ls ${deviceDirectoryPath}`;
     let rawOutputLines: string[] = [];
     try {
-      const commandOutput: string = await execPromise(commandForListing);
+      const commandOutput = await runMpremote(['fs', 'ls', getRemoteFilePath(deviceDirectoryPath)]);
       rawOutputLines = commandOutput.split('\n').map(line => line.trim()).filter(line => line !== '');
     } catch (error: any) {
       mpyOutputChannel.show(true);
@@ -518,16 +512,16 @@ class FileManagerProvider implements vscode.TreeDataProvider<FileItem> {
       if (line.startsWith('ls :')) {
         continue;
       }
-      const parts: string[] = line.split(/\s+/, 2);
-      if (parts.length < 2) {
+      const entry = parseFileSystemEntry(line);
+      if (!entry) {
         continue;
       }
-      let rawName: string = parts[1];
-      let isDirectory: boolean = false;
-      if (rawName.endsWith('/')) {
-        isDirectory = true;
-        rawName = rawName.replace(/\/+$/, '');
+      const rawName = entry.name;
+      if (!isValidDeviceEntryName(rawName)) {
+        mpyOutputChannel.appendLine(`⚠️ Ignoring unsafe device entry: ${JSON.stringify(rawName)}`);
+        continue;
       }
+      const isDirectory = entry.isDirectory;
       let displayName = rawName;
       if (isDirectory) {
         displayName = '📁 ' + rawName;
@@ -570,18 +564,23 @@ class FileItem extends vscode.TreeItem {
   }
 }
 
-function execPromise(command: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    exec(command, (error: Error | null, standardOutput: string, standardError: string) => {
-      if (error) {
-        mpyOutputChannel.appendLine(`❌ ${error.message}`);
-        return reject(error);
-      }
-      if (standardError && standardError.trim()) {
-        mpyOutputChannel.appendLine(`❌ ${standardError.trim()}`);
-        return reject(new Error(standardError.trim()));
-      }
-      resolve(standardOutput);
-    });
-  });
+function requireDeviceSession(): DeviceSession {
+  if (!activeDeviceSession) {
+    throw new Error('MPyTools device session is not initialized.');
+  }
+  return activeDeviceSession;
+}
+
+async function runMpremote(args: readonly string[]): Promise<string> {
+  const result = await requireDeviceSession().run(args, { timeoutMs: 60_000 });
+  return result.stdout;
+}
+
+function canonicalLocalPath(filePath: string): string {
+  const normalized = path.normalize(filePath);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function isValidDeviceEntryName(name: string): boolean {
+  return name !== '.' && name !== '..' && !/[\\/\0]/u.test(name);
 }

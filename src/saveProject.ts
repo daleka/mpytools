@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { createZipArchive } from './archive';
  
 /**
  * Реєструє команду "mpytools.saveProject", а також додає кнопку в статус-бар
@@ -11,12 +11,10 @@ import * as os from 'os';
  *
  * @param context        Контекст розширення, потрібен для реєстрації команд та збереження підписок.
  * @param outputChannel  Канал виводу (наприклад, mpyOutputChannel), куди логуватиметься процес.
- * @param execPromise    Функція для виконання shell-команд (з extension.ts).
  */ 
 export function registerSaveProjectCommand(
   context: vscode.ExtensionContext,
-  outputChannel: vscode.OutputChannel,
-  execPromise: (command: string) => Promise<string>
+  outputChannel: vscode.OutputChannel
 ): void {
 
   // 1. Створюємо кнопку (StatusBarItem) у статус-барі
@@ -75,19 +73,10 @@ export function registerSaveProjectCommand(
       const archiveFileName = newVersion + '.zip';
       const archiveFilePath = path.join(saveFolderPath, archiveFileName);
 
-      // Формуємо команду архівації залежно від платформи
-      let archiveCommand = '';
-      if (os.platform() === 'win32') {
-        archiveCommand = `powershell -Command "Compress-Archive -Path '${srcFolderPath}' -DestinationPath '${archiveFilePath}'"`;
-      } else {
-        archiveCommand = `cd "${workspaceRoot}" && zip -r "${archiveFilePath}" "src"`;
-      }
-
       outputChannel.appendLine(`🔹 Save Project -> creating archive: ${archiveFileName}`);
 
       try {
-        // Використовуємо надану з extension.ts функцію execPromise
-        await execPromise(archiveCommand);
+        await createZipArchive(srcFolderPath, archiveFilePath);
         vscode.window.showInformationMessage(`Проект збережено (Project saved) як: ${archiveFileName}`);
         outputChannel.appendLine(`✅ Project archived as: ${archiveFileName}\n`);
       } catch (err: any) {

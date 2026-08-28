@@ -6,6 +6,27 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.0]
+
+- Fix Linux absolute serial paths being expanded from `/dev/ttyACM0` to
+  `/dev//dev/ttyACM0`.
+- Add typed `mpremote connect list` parsing and persist devices by USB serial
+  number when available.
+- Serialize device commands and coordinate them with a single extension-owned
+  REPL terminal to prevent false "port busy" failures.
+- Replace shell command construction with argument-safe process execution.
+- Add isolated, pinned `mpremote` and `mpy-cross` installation under VS Code
+  extension storage; do not modify the system Python or `PATH`.
+- Add Linux-oriented diagnostics for ports, permissions, groups, tool source,
+  and device connectivity.
+- Move build artifacts and temporary device files into MPyTools-owned storage.
+- Preserve spaces and Unicode in device file names and guard local paths against
+  traversal.
+- Install stubs only into `.mpytools/typings` without deleting user folders or
+  rewriting `pyproject.toml`.
+- Replace platform-specific ZIP commands with a cross-platform archive library.
+- Add portable core tests, release checks, and Windows/Linux/macOS CI.
+
 ## [0.3.2]
 
 - Resolve and run the native `mpy-cross` binary instead of starting its Python launcher for every file.

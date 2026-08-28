@@ -2,9 +2,13 @@
   "name": "mpytools",
   "displayName": "MPyTools",
   "description": "MPyTools – просте та гнучке розширення для роботи з MicroPython у VS Code. | MPyTools – a simple and flexible extension for working with MicroPython in VS Code.",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "preview": true,
   "publisher": "daleka",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daleka/mpytools.git"
+  },
   "engines": {
     "vscode": "^1.97.0"
   },
@@ -24,24 +28,48 @@
         "title": "MPY: Connect and start REPL / Підключитись та запустити REPL"
       },
       {
-        "command": "mpytools.compileAndMount",
-        "title": "Compile PY → MPY and mount / Компіляція PY → MPY та монтування"
+        "command": "mpytools.selectPort",
+        "title": "MPY: Select Port / Обрати порт"
+      },
+      {
+        "command": "mpytools.compileAndRun",
+        "title": "MPY: Compile and Run / Компілювати та запустити"
       },
       {
         "command": "mpytools.installDependencies",
-        "title": "Install Dependencies / Встановити залежності"
+        "title": "MPY: Install Managed Toolchain / Встановити ізольовані інструменти"
       },
       {
-        "command": "mpytools.openMicroPythonProject",
-        "title": "📂Open Project"
+        "command": "mpytools.installStubs",
+        "title": "MPY: Install Workspace Stubs / Встановити stubs"
       },
       {
-        "command": "mpytools.openInExplorer",
-        "title": "🗃️Explorer"
+        "command": "mpytools.diagnostics",
+        "title": "MPY: Diagnostics / Діагностика"
       },
       {
-        "command": "mpytools.saveAllDirty",
-        "title": "💾Save All"
+        "command": "mpytools.saveProject",
+        "title": "MPY: Save Project Archive / Архівувати проєкт"
+      },
+      {
+        "command": "mpytools.runActive",
+        "title": "MPY: Run Active File / Запустити активний файл"
+      },
+      {
+        "command": "mpytools.stop",
+        "title": "MPY: Stop / Зупинити"
+      },
+      {
+        "command": "mpytools.repl",
+        "title": "MPY: Open REPL"
+      },
+      {
+        "command": "mpytools.resetHard",
+        "title": "MPY: Hard Reset"
+      },
+      {
+        "command": "mpytools.openSettings",
+        "title": "MPY: Settings / Налаштування"
       },
       {
         "command": "mpytoolsFileExplorer.refreshFolder",
@@ -84,6 +112,17 @@
         "title": "🧹Clear Device / Очистити пристрій"
       }
     ],
+    "configuration": {
+      "title": "MPyTools",
+      "properties": {
+        "mpytools.mpremotePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional absolute path to an mpremote executable. This explicit override takes priority over managed and PATH installations."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -102,8 +141,7 @@
       ]
     },
     "menus": {
-      "view/title": [
-      ],
+      "view/title": [],
       "view/item/context": [
         {
           "command": "mpytoolsFileExplorer.refreshFolder",
@@ -160,22 +198,30 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
+    "compile": "npm run clean && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "mocha --ui tdd \"out/test/core.test.js\"",
+    "test:integration": "vscode-test",
+    "check:release": "node scripts/check-release.mjs",
+    "check": "npm test && npm run check:release && npm audit --omit=dev",
+    "package:vsix": "npm run check && vsce package"
   },
   "devDependencies": {
-    "@types/vscode": "^1.97.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/vscode": "1.97.0",
+    "@types/yazl": "^3.3.1",
     "@typescript-eslint/eslint-plugin": "^8.22.0",
     "@typescript-eslint/parser": "^8.22.0",
-    "eslint": "^9.19.0",
-    "typescript": "^5.7.3",
     "@vscode/test-cli": "^0.0.10",
-    "@vscode/test-electron": "^2.4.1"
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.9.2",
+    "eslint": "^9.19.0",
+    "mocha": "^11.7.5",
+    "typescript": "^5.7.3"
   },
   "icon": "icon.png",
   "keywords": [
@@ -192,5 +238,8 @@
     "Embedded",
     "IoT",
     "VSCode"
-  ]
+  ],
+  "dependencies": {
+    "yazl": "^3.3.1"
+  }
 }

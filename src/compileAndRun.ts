@@ -4,8 +4,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
 import { prepareFirmwareVersion, saveFirmwareSnapshot } from './projectBuild';
+import { DeviceSession } from './deviceSession';
  
 
 /**
@@ -14,16 +14,13 @@ import { prepareFirmwareVersion, saveFirmwareSnapshot } from './projectBuild';
  *
  * @param context               - контекст розширення
  * @param outputChannel         - канал виводу
- * @param execPromise           - функція для виконання shell-команд
- * @param getLastUsedPort       - функція-гетер для lastUsedPort
+ * @param deviceSession         - єдиний серіалізований доступ до MicroPython пристрою
  * @param getSelectedMethod     - функція-гетер для selectedCompilationMethod
  * @param setSelectedMethod     - функція-сетер для export function registerCompileAndRunCommand(
  * @param needsRecompile        - функція перевірки потреби перекомпіляції
  * @param compilePyFile         - функція компіляції одного .py у .mpy
  * @param compileFileToOutput   - функція компіляції у вказаний вихідний файл
  * @param findPyFiles           - функція пошуку .py в папці src
- * @param openTerminalAndRunMain - функція запуску main (mpremote connect ... + repl)
- * @param formatPort            - функція форматування порту
  * @param getMicropythonVersion - функція-гетер для micropythonVersion
  * @param getMicropythonBytecodeVersion - функція-гетер для micropythonBytecodeVersion
  * @param getMicropythonArchitecture - функція-гетер для micropythonArchitecture
@@ -35,16 +32,13 @@ import { prepareFirmwareVersion, saveFirmwareSnapshot } from './projectBuild';
 export function registerCompileAndRunCommand(
   context: vscode.ExtensionContext,
   outputChannel: vscode.OutputChannel,
-  execPromise: (cmd: string) => Promise<string>,
-  getLastUsedPort: () => string,
+  deviceSession: DeviceSession,
   getSelectedMethod: () => string | undefined,
   setSelectedMethod: (val: string | undefined) => void,
   needsRecompile: (pyFilePath: string, srcPath: string, mpyPath: string) => boolean,
   compilePyFile: (pyFilePath: string, srcPath: string, mpyPath: string) => Promise<string>,
   compileFileToOutput: (sourcePath: string, outPath: string) => Promise<string>,
   findPyFiles: (rootDir: string, ignoreList?: string[]) => string[],
-  openTerminalAndRunMain: (port: string, debugTerminal: vscode.Terminal) => Promise<void>,
-  formatPort: (port: string) => string,
   getMicropythonVersion: () => string | undefined,
   getMicropythonBytecodeVersion: () => number | undefined,
   getMicropythonArchitecture: () => string | undefined,
@@ -149,7 +143,11 @@ export function registerCompileAndRunCommand(
     // 2.4 Підготовчі змінні
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
     const srcPath = path.join(workspaceRoot, 'src');
-    const mpyPath = path.join(workspaceRoot, 'mpy');
+    const mpyPath = path.join(workspaceRoot, '.mpytools', 'build');
+    if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isDirectory()) {
+      vscode.window.showErrorMessage(`Source folder does not exist: ${srcPath}`);
+      return;
+    }
 
     let preparedVersion;
     try {
@@ -164,16 +162,10 @@ export function registerCompileAndRunCommand(
 
     if (shouldResetMpyFolder && fs.existsSync(mpyPath)) {
       fs.rmSync(mpyPath, { recursive: true, force: true });
-      logAndScroll("🗑 Cleared 'mpy' folder.");
+      logAndScroll("🗑 Cleared MPyTools-owned build folder.");
     }
 
-    // Закриваємо термінали MPY
-    vscode.window.terminals.forEach((t) => {
-      if (t.name.startsWith('MPY')) {
-        t.dispose();
-      }
-    });
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await deviceSession.closeInteractiveTerminal();
 
     outputChannel.show(false);
     logAndScroll("🔹 Starting Compile & Run...");
@@ -185,7 +177,8 @@ export function registerCompileAndRunCommand(
     compileStatusBarItem.color = 'red';
 
     // 2.5 Основний процес з індикацією Progress
-    vscode.window.withProgress({
+    try {
+      await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: 'MPyTools: Compile & Run',
       cancellable: false
@@ -194,13 +187,15 @@ export function registerCompileAndRunCommand(
       let wrappedNonPyCount = 0;
       let copiedNonPyCount = 0;
       let copiedPyCount = 0;
+      const buildErrors: string[] = [];
+      const expectedBuildFiles = new Set<string>();
 
       if (currentMethod !== 'none') {
         // --- Компіляційний режим ---
         progress.report({ message: 'Preparing compilation...' });
         logAndScroll("🔹 Preparing compilation...");
         if (!fs.existsSync(mpyPath)) {
-          fs.mkdirSync(mpyPath);
+          fs.mkdirSync(mpyPath, { recursive: true });
           vscode.window.showInformationMessage(`Created directory: ${mpyPath}`);
           logAndScroll(`   ✅ Created directory: ${mpyPath}`);
         }
@@ -223,6 +218,15 @@ export function registerCompileAndRunCommand(
 
         const pythonFiles = allFiles.filter((filePath) => path.extname(filePath).toLowerCase() === '.py');
         const nonPythonFiles = allFiles.filter((filePath) => path.extname(filePath).toLowerCase() !== '.py');
+        for (const filePath of pythonFiles) {
+          const relative = path.relative(srcPath, filePath).replace(/\.py$/u, '.mpy');
+          expectedBuildFiles.add(path.join(mpyPath, relative));
+        }
+        for (const filePath of nonPythonFiles) {
+          expectedBuildFiles.add(shouldWrapNonPy
+            ? getAssetOutputPath(filePath, srcPath, mpyPath)
+            : getRawOutputPath(filePath, srcPath, mpyPath));
+        }
         const pythonFilesToCompile: string[] = [];
 
         for (const filePath of pythonFiles) {
@@ -253,7 +257,7 @@ export function registerCompileAndRunCommand(
               compiledCount++;
               logAndScroll(`      ✅ OK: ${shortName}`);
             } catch (err: any) {
-              vscode.window.showWarningMessage(`Compilation error: ${shortName}\n${err}`);
+              buildErrors.push(`${shortName}: ${err.message ?? err}`);
               logAndScroll(`      ❌ Compilation error: ${shortName} -> ${err.message}`);
             }
             logAndScroll("");
@@ -275,7 +279,7 @@ export function registerCompileAndRunCommand(
                 logAndScroll(`      ✅ OK: ${shortName} -> ${path.relative(workspaceRoot, outAssetPath)}`);
                 logAndScroll(`      ℹ️ Wrapper: ${path.relative(workspaceRoot, getAssetWrapperPyPath(filePath, srcPath))}`);
               } catch (err: any) {
-                vscode.window.showWarningMessage(`Asset wrapping/compilation error: ${shortName}\n${err}`);
+                buildErrors.push(`${shortName}: ${err.message ?? err}`);
                 logAndScroll(`      ❌ Asset wrapping/compilation error: ${shortName} -> ${err.message}`);
               }
             } else {
@@ -300,12 +304,15 @@ export function registerCompileAndRunCommand(
         } else {
           logAndScroll(`   ✅ Compiled ${compiledCount} .py files; Copied ${copiedNonPyCount} non-py files as-is.`);
         }
+        if (buildErrors.length > 0) {
+          throw new Error(`Compilation failed for ${buildErrors.length} file(s):\n${buildErrors.join('\n')}`);
+        }
       } else {
         // --- Режим "No Compilation" ---
         progress.report({ message: 'Preparing files in mpy without compilation...' });
         logAndScroll("🔹 No compilation selected. Preparing files in 'mpy'...");
         if (!fs.existsSync(mpyPath)) {
-          fs.mkdirSync(mpyPath);
+          fs.mkdirSync(mpyPath, { recursive: true });
           logAndScroll(`   ✅ Created directory: ${mpyPath}`);
         }
         let allFiles: string[] = [];
@@ -321,6 +328,12 @@ export function registerCompileAndRunCommand(
             }
           }
         })(srcPath);
+        for (const filePath of allFiles) {
+          const isPython = path.extname(filePath).toLowerCase() === '.py';
+          expectedBuildFiles.add(isPython || !shouldWrapNonPy
+            ? getRawOutputPath(filePath, srcPath, mpyPath)
+            : getAssetPyOutputPath(filePath, srcPath, mpyPath));
+        }
         for (let i = 0; i < allFiles.length; i++) {
           const filePath = allFiles[i];
           const shortName = path.relative(workspaceRoot, filePath);
@@ -364,18 +377,15 @@ export function registerCompileAndRunCommand(
         }
       }
 
+      pruneBuildDirectory(mpyPath, expectedBuildFiles);
+
       // 2.6 Копіюємо файли на пристрій
-      const usedPort = getLastUsedPort();
-      const finalPort = (usedPort === 'auto') ? 'auto' : formatPort(usedPort);
       let copyPath: string;
       copyPath = os.platform() === 'win32' ? `${mpyPath}\\.` : `${mpyPath}/.`;
-      const copyCmd = (finalPort === 'auto')
-        ? `mpremote connect auto fs cp -r "${copyPath}" ":/"`
-        : `mpremote connect ${finalPort} fs cp -r "${copyPath}" ":/"`;
 
       logAndScroll("🔹 Copying files to device...");
       try {
-        await execPromise(copyCmd);
+        await deviceSession.run(['fs', 'cp', '-r', copyPath, ':/'], { timeoutMs: 120_000 });
         vscode.window.showInformationMessage('Copy complete.');
         logAndScroll("   ✅ Copy complete.");
       } catch (err: any) {
@@ -409,22 +419,20 @@ export function registerCompileAndRunCommand(
       logAndScroll(`🔹 Total size of uploaded folder: ${folderSizeKB.toFixed(2)} KB`);
       logAndScroll("🔹 Launching main...");
 
-      // Невелика затримка для перегляду логів
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Повертаємо кнопку до нормального стану
-      compileStatusBarItem.text = '$(rocket)Compile&Run';
-      compileStatusBarItem.color = '#00BFFF';
-
       // 2.8 Запускаємо main
-      let debugTerminal = vscode.window.createTerminal('MPY Debugging');
-      debugTerminal.show();
-
-      await openTerminalAndRunMain(finalPort, debugTerminal);
-
+      await deviceSession.openRepl(
+        'MPY Debugging',
+        'import main\nprint("[MPyTools] main.run()")\nmain.run()\n'
+      );
+      });
+    } catch (error: any) {
+      const message = `Compile & Run failed: ${error.message ?? error}`;
+      logAndScroll(`❌ ${message}`);
+      vscode.window.showErrorMessage(message);
+    } finally {
       compileStatusBarItem.text = '$(rocket)Compile&Run';
       compileStatusBarItem.color = '#00BFFF';
-    });
+    }
   });
 
   context.subscriptions.push(disposableCompileAndRun);
@@ -483,7 +491,34 @@ function getAssetWrapperPyPath(filePath: string, srcPath: string): string {
   const ext = path.extname(relativeFromSrc);
   const wrapperRelativePath = ext ? relativeFromSrc.slice(0, -ext.length) + '.py' : `${relativeFromSrc}.py`;
   const workspaceRoot = path.dirname(srcPath);
-  return path.join(workspaceRoot, 'temp', wrapperRelativePath);
+  return path.join(workspaceRoot, '.mpytools', 'wrappers', wrapperRelativePath);
+}
+
+/** Remove stale output files, but only inside MPyTools' explicitly owned build directory. */
+function pruneBuildDirectory(buildRoot: string, expectedFiles: Set<string>): void {
+  const resolvedRoot = path.resolve(buildRoot);
+  if (path.basename(resolvedRoot) !== 'build' || path.basename(path.dirname(resolvedRoot)) !== '.mpytools') {
+    throw new Error(`Refusing to prune a non-MPyTools build directory: ${resolvedRoot}`);
+  }
+  const expected = new Set([...expectedFiles].map((file) => path.resolve(file)));
+
+  function visit(directory: string): void {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        visit(entryPath);
+        if (fs.readdirSync(entryPath).length === 0) {
+          fs.rmdirSync(entryPath);
+        }
+      } else if (!expected.has(path.resolve(entryPath))) {
+        fs.unlinkSync(entryPath);
+      }
+    }
+  }
+
+  if (fs.existsSync(resolvedRoot)) {
+    visit(resolvedRoot);
+  }
 }
 
 function needsAssetRecompile(sourceFilePath: string, outAssetPath: string): boolean {

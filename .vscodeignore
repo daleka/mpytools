@@ -5,8 +5,10 @@
 .vscode/**
 .vscode-test/**
 .vscode-test.mjs
-node_modules/**
 src/**
+scripts/**
+extension/**
+resources/**
 out/test/**
 out/**/*.map
 *.vsix

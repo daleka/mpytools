@@ -3,14 +3,16 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
-import { exec } from 'child_process';
 import { registerDependenciesCommand } from './dependenciesInstaller';
 import { registerSaveProjectCommand } from './saveProject';
 import { registerCompileAndRunCommand } from './compileAndRun';
 import { registerFileManager } from './fileManager';
-import { setSelectedPort as setSharedSelectedPort } from './sharedState';
 import { formatMpyCrossInvocation, runMpyCross } from './mpyCross';
+import { ToolchainManager } from './toolchain';
+import { MpremoteService } from './mpremoteService';
+import { DeviceSession } from './deviceSession';
+import { describePort, SerialPortDescriptor } from './ports';
+import { decodeMpyAbi } from './micropythonInfo';
 
 // Вікно логу
 export const mpyOutputChannel = vscode.window.createOutputChannel("MPyTools Log");
@@ -32,38 +34,42 @@ let selectedCompilationMethod: string | undefined = undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log('MPyTools розширення активовано.');
+  context.subscriptions.push(mpyOutputChannel);
   const compileMethodSettingKey = 'mpytools.compileMethod';
   const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
   const compileSettingsDirtyKey = 'mpytools.compileSettingsDirty';
 
-  // 1. Реєструємо команду встановлення залежностей
-  registerDependenciesCommand(context, mpyOutputChannel);
+  const toolchain = new ToolchainManager(context, mpyOutputChannel);
+  const mpremote = new MpremoteService(toolchain, (line) => mpyOutputChannel.appendLine(line));
+  const deviceSession = new DeviceSession(context, mpremote);
+  context.subscriptions.push(deviceSession);
+  lastUsedPort = deviceSession.currentPort();
+
+  // 1. Реєструємо команду ізольованого встановлення залежностей
+  registerDependenciesCommand(context, mpyOutputChannel, toolchain);
  
   // 1.5 Реєструємо команду збереження проекту
-  registerSaveProjectCommand(context, mpyOutputChannel, execPromise);
+  registerSaveProjectCommand(context, mpyOutputChannel);
 
   // Реєструємо менеджер файлів
-  registerFileManager(context);
+  registerFileManager(context, deviceSession);
 
-  // 2. Перевірка на встановлення mpremote тощо
-  const packageJsonPath = context.asAbsolutePath('./package.json');
-  const packageStats = fs.statSync(packageJsonPath);
-  const currentInstallTime = packageStats.mtime.getTime();
-  const storedInstallTime = context.globalState.get<number>('extensionInstallTime', 0);
-  if (currentInstallTime > storedInstallTime) {
-    context.globalState.update('extensionInstallTime', currentInstallTime);
-    vscode.window.showInformationMessage(
-      "MPyTools needs dependencies:\n- mpremote\n- mpy-cross\n- micropython-stdlib-stubs\nInstall them now?",
-      "Yes",
-      "No"
-    ).then((choice) => {
-      if (choice === "Yes") {
-        vscode.commands.executeCommand('mpytools.installDependencies');
-      } else {
-        console.log("User chose not to install dependencies.");
-      }
-    });
-  }
+  // 2. Перевіряємо реальний стан інструментів, а не час перевстановлення VSIX.
+  void toolchain.health().then((health) => {
+    if (!health.mpremote || !health.mpyCrossAvailable) {
+      const missing = [!health.mpremote && 'mpremote', !health.mpyCrossAvailable && 'mpy-cross']
+        .filter(Boolean)
+        .join(', ');
+      void vscode.window.showInformationMessage(
+        `MPyTools is missing: ${missing}. Install an isolated toolchain?`,
+        'Install'
+      ).then((choice) => {
+        if (choice === 'Install') {
+          void vscode.commands.executeCommand('mpytools.installDependencies');
+        }
+      });
+    }
+  });
 
   // 3. Елементи статус-бару (Select Port, Run, Stop, нова кнопка "перл", Reset)
   let connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
@@ -90,11 +96,11 @@ export function activate(context: vscode.ExtensionContext): void {
   stopStatusBarItem.hide();
   context.subscriptions.push(stopStatusBarItem);
 
-  // Нова кнопка "перл"
+  // Кнопка REPL
   let perlStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -2);
-  perlStatusBarItem.text = '$(terminal) Perl';
+  perlStatusBarItem.text = '$(terminal) REPL';
   perlStatusBarItem.tooltip = 'Open REPL terminal (without running main.run())';
-  perlStatusBarItem.command = 'mpytools.perl';
+  perlStatusBarItem.command = 'mpytools.repl';
   perlStatusBarItem.hide();
   context.subscriptions.push(perlStatusBarItem);
   
@@ -119,12 +125,14 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(settingsStatusBarItem);
 
   // Реєструємо команду "mpytools.openSettings" для кнопки-настроек
-  vscode.commands.registerCommand('mpytools.openSettings', async (): Promise<void> => {
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.openSettings', async (): Promise<void> => {
     const wrapEnabled = context.workspaceState.get<boolean>(wrapNonPySettingKey);
     const options: vscode.QuickPickItem[] = [
       { label: 'Select Compilation Method', description: 'Re-select compilation method' },
       { label: 'Compile non-.py files (ON/OFF)', description: `Current: ${wrapEnabled === false ? 'OFF' : 'ON'}` },
-      { label: 'Install Dependencies', description: 'Run dependency installation' }
+      { label: 'Install Toolchain', description: 'Install isolated mpremote and mpy-cross' },
+      { label: 'Install Stubs', description: 'Install project-local MicroPython stubs' },
+      { label: 'Diagnostics', description: 'Inspect toolchain, serial ports and device access' }
     ];
     const selected = await vscode.window.showQuickPick(options, { placeHolder: 'Select an option' });
     if (!selected) {
@@ -134,13 +142,17 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand('mpytools.selectCompilationMethod');
     } else if (selected.label === 'Compile non-.py files (ON/OFF)') {
       vscode.commands.executeCommand('mpytools.selectNonPyCompilationMode');
-    } else if (selected.label === 'Install Dependencies') {
+    } else if (selected.label === 'Install Toolchain') {
       vscode.commands.executeCommand('mpytools.installDependencies');
+    } else if (selected.label === 'Install Stubs') {
+      vscode.commands.executeCommand('mpytools.installStubs');
+    } else if (selected.label === 'Diagnostics') {
+      vscode.commands.executeCommand('mpytools.diagnostics');
     }
-  });
+  }));
 
   // Реєструємо команду "mpytools.selectCompilationMethod"
-  vscode.commands.registerCommand('mpytools.selectCompilationMethod', async (): Promise<void> => {
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.selectCompilationMethod', async (): Promise<void> => {
     const compilationOptions: vscode.QuickPickItem[] = [
       { label: 'mpy-cross optimization Level 0', description: 'No optimization' },
       { label: 'mpy-cross optimization Level 1', description: 'Basic optimization' },
@@ -164,9 +176,9 @@ export function activate(context: vscode.ExtensionContext): void {
     await context.workspaceState.update(compileMethodSettingKey, selectedCompilationMethod);
     await context.workspaceState.update(compileSettingsDirtyKey, false);
     vscode.window.showInformationMessage(`Compilation method set to: ${selectedCompilationMethod === 'none' ? 'No Compilation' : 'Optimization O' + selectedCompilationMethod}`);
-  });
+  }));
 
-  vscode.commands.registerCommand('mpytools.selectNonPyCompilationMode', async (): Promise<void> => {
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.selectNonPyCompilationMode', async (): Promise<void> => {
     const options: vscode.QuickPickItem[] = [
       {
         label: 'ON — Compile non-.py files',
@@ -188,105 +200,114 @@ export function activate(context: vscode.ExtensionContext): void {
     await context.workspaceState.update(wrapNonPySettingKey, shouldWrapNonPy);
     await context.workspaceState.update(compileSettingsDirtyKey, false);
     vscode.window.showInformationMessage(`Compile non-.py files: ${shouldWrapNonPy ? 'ON' : 'OFF'}`);
-  });
+  }));
 
-  // --- Оновлений код вибору порту з асинхронним скануванням ---
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.diagnostics', async (): Promise<void> => {
+    mpyOutputChannel.clear();
+    mpyOutputChannel.show(true);
+    mpyOutputChannel.appendLine('=== MPyTools Diagnostics ===');
+    mpyOutputChannel.appendLine(`Host: ${process.platform} ${process.arch}`);
+    mpyOutputChannel.appendLine(`VS Code environment: ${vscode.env.remoteName ?? 'local'}`);
+    mpyOutputChannel.appendLine(`Selected port: ${deviceSession.currentPort()}`);
+    if (process.platform !== 'win32') {
+      mpyOutputChannel.appendLine(`UID/GID: ${process.getuid?.() ?? 'n/a'}/${process.getgid?.() ?? 'n/a'}`);
+      mpyOutputChannel.appendLine(`Supplementary groups: ${process.getgroups?.().join(', ') ?? 'n/a'}`);
+    }
+    const health = await toolchain.health();
+    if (health.mpremote) {
+      mpyOutputChannel.appendLine(
+        `mpremote: ${health.mpremote.executable} (${health.mpremote.source})`
+      );
+    } else {
+      mpyOutputChannel.appendLine('mpremote: MISSING');
+    }
+    mpyOutputChannel.appendLine(`mpy-cross: ${health.mpyCrossAvailable ? 'available' : 'MISSING'}`);
+    try {
+      const ports = await mpremote.listPorts();
+      mpyOutputChannel.appendLine(`Serial ports (${ports.length}):`);
+      for (const port of ports) {
+        mpyOutputChannel.appendLine(`  ${port.path}  ${describePort(port)}`);
+      }
+    } catch (error: any) {
+      mpyOutputChannel.appendLine(`Port discovery failed: ${error.message}`);
+    }
+    const selectedPath = deviceSession.currentPort();
+    if (selectedPath.startsWith('/')) {
+      try {
+        const stat = fs.statSync(selectedPath);
+        fs.accessSync(selectedPath, fs.constants.R_OK | fs.constants.W_OK);
+        mpyOutputChannel.appendLine(
+          `Port access: read/write OK, mode=${(stat.mode & 0o777).toString(8)}, uid=${stat.uid}, gid=${stat.gid}`
+        );
+      } catch (error: any) {
+        mpyOutputChannel.appendLine(`Port access failed: ${error.code ?? ''} ${error.message}`);
+      }
+    }
+    try {
+      const result = await deviceSession.run([
+        'exec',
+        "import os; print('DEVICE:', os.uname())"
+      ], { timeoutMs: 15_000 });
+      mpyOutputChannel.appendLine(result.stdout.trim());
+      mpyOutputChannel.appendLine('✅ Device connection successful.');
+    } catch (error: any) {
+      mpyOutputChannel.appendLine(`❌ Device connection failed: ${error.kind ?? 'unknown'}: ${error.message}`);
+    }
+  }));
+
+  // Вибір порту: mpremote вже повертає повні системні шляхи, тому не додаємо /dev повторно.
   let disposableSelectPort = vscode.commands.registerCommand('mpytools.selectPort', async (): Promise<void> => {
     await context.workspaceState.update(compileSettingsDirtyKey, true);
-    vscode.window.terminals
-      .filter(t => t.name.startsWith("MPY"))
-      .forEach(t => t.dispose());
+    await deviceSession.closeInteractiveTerminal();
     mpyOutputChannel.show(true);
     mpyOutputChannel.appendLine("=== Select Port command invoked ===");
-    await new Promise(resolve => setTimeout(resolve, 300));
     connectionStatusBarItem.text = '$(sync~spin) Scanning ports...';
     connectionStatusBarItem.color = 'yellow';
     connectionStatusBarItem.tooltip = 'Scanning available ports...';
-    let availablePorts: string[] = [];
-    let portsError: string | null = null;
+    let availablePorts: SerialPortDescriptor[] = [];
     try {
-      const { ports, errorMsg } = await listRawPorts();
-      if (errorMsg) {
-        portsError = errorMsg;
-      }
-      availablePorts = ports;
+      availablePorts = await mpremote.listPorts();
     } catch (err: any) {
-      portsError = err.message ?? String(err);
+      mpyOutputChannel.appendLine("❌ Error listing ports: " + (err.message ?? String(err)));
     }
-    if (!availablePorts.includes('auto')) {
-      availablePorts.push('auto');
+    interface PortPickItem extends vscode.QuickPickItem {
+      descriptor?: SerialPortDescriptor;
     }
-    if (portsError) {
-      mpyOutputChannel.appendLine("❌ Error listing ports: " + portsError);
-    }
-    const quickPick = vscode.window.createQuickPick();
+    const quickPick = vscode.window.createQuickPick<PortPickItem>();
     quickPick.placeholder = `Select a port to use (current: ${lastUsedPort})`;
     quickPick.matchOnDescription = true;
-    let items: vscode.QuickPickItem[] = availablePorts.map((p) => ({
-      label: p,
-      description: (p === 'auto') ? '(Automatic detection)' : '(No info yet...)'
+    const items: PortPickItem[] = availablePorts.map((port) => ({
+      label: port.path,
+      description: describePort(port) || 'Serial port',
+      descriptor: port
     }));
-    if (items.length === 0) {
-      items.push({
-        label: 'auto',
-        description: '(No ports found...)'
-      });
-    }
+    items.push({ label: 'auto', description: 'Automatic MicroPython detection' });
     quickPick.items = items;
-    let stopScanning = false;
-    (async () => {
-      for (let i = 0; i < items.length; i++) {
-        if (stopScanning) { break; }
-        let item = items[i];
-        if (item.label === 'auto') { continue; }
-        try {
-          const deviceInfo = await tryGetDeviceInfo(item.label);
-          if (stopScanning) { break; }
-          if (deviceInfo) {
-            let { sys, rel, mach } = deviceInfo;
-            item.description = sys && rel && mach ? `(${sys} ${rel} ${mach})` : '(Micropython? unrecognized uname)';
-          } else {
-            item.description = '(Failed or not MicroPython)';
-          }
-        } catch (err: any) {
-          item.description = `(Access error: ${err.message || err})`;
-        }
-        quickPick.items = [...items];
-      }
-    })();
+    quickPick.onDidHide(() => quickPick.dispose());
     quickPick.onDidAccept(async () => {
-      stopScanning = true;
       const chosen = quickPick.selectedItems[0];
       if (!chosen) {
         quickPick.hide();
         return;
       }
-      await new Promise(resolve => setTimeout(resolve, 200));
-      lastUsedPort = chosen.label;
-      setSharedSelectedPort(lastUsedPort);
-      mpyOutputChannel.appendLine(`▶️ Selected port: "${lastUsedPort}"`);
-      connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
-      connectionStatusBarItem.color = 'yellow';
-      connectionStatusBarItem.tooltip = 'Connecting to the device...';
-      vscode.window.terminals
-        .filter(t => t.name.startsWith("MPY"))
-        .forEach(t => t.dispose());
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const usedPort = (lastUsedPort === 'auto') ? 'auto' : formatPort(lastUsedPort);
-      mpyOutputChannel.show(true);
-      mpyOutputChannel.appendLine(`⚙️ Fetching device info (version, architecture, small-int bits)...`);
-      mpyOutputChannel.appendLine(`⚙️ mpremote connect ${usedPort} exec "import sys; ..."`);
-      let fetchError: any = null;
+      compileStatusBarItem.hide();
+      runStatusBarItem.hide();
+      stopStatusBarItem.hide();
+      perlStatusBarItem.hide();
+      resetStatusBarItem.hide();
       try {
-        await fetchMicropythonVersionInfo(usedPort);
-      } catch (err) {
-        fetchError = err;
-      }
-      vscode.commands.executeCommand('mpytoolsFileExplorer.refresh');
-      if (!fetchError) {
+        await deviceSession.select(chosen.descriptor);
+        lastUsedPort = deviceSession.currentPort();
+        mpyOutputChannel.appendLine(`▶️ Selected port: "${lastUsedPort}"`);
+        connectionStatusBarItem.text = '$(sync~spin) MPY: Connecting...';
+        connectionStatusBarItem.color = 'yellow';
+        connectionStatusBarItem.tooltip = 'Connecting to the device...';
+        mpyOutputChannel.show(true);
+        mpyOutputChannel.appendLine('⚙️ Fetching device info (version, architecture, small-int bits)...');
+        await fetchMicropythonVersionInfo(deviceSession);
+        await vscode.commands.executeCommand('mpytoolsFileExplorer.refresh');
         mpyOutputChannel.appendLine(`✅ Connected to port: "${lastUsedPort}"`);
-        mpyOutputChannel.appendLine("✅ Fetched device info successfully.");
-        mpyOutputChannel.appendLine("");
+        mpyOutputChannel.appendLine("✅ Fetched device info successfully.\n");
         compileStatusBarItem.show();
         runStatusBarItem.show();
         stopStatusBarItem.show();
@@ -295,46 +316,30 @@ export function activate(context: vscode.ExtensionContext): void {
         connectionStatusBarItem.text = `$(check) ${micropythonSysName ?? '???'} ${micropythonRelease ?? ''} ${lastUsedPort}`;
         connectionStatusBarItem.color = 'green';
         connectionStatusBarItem.tooltip = 'Port selected';
-      } else {
-        mpyOutputChannel.appendLine(`⚠️ Could not fetch MicroPython info: ${fetchError}`);
-        mpyOutputChannel.appendLine("");
+      } catch (error: any) {
+        mpyOutputChannel.appendLine(`⚠️ Could not fetch MicroPython info: ${error.message ?? error}`);
+        connectionStatusBarItem.text = `$(error) ${lastUsedPort}`;
+        connectionStatusBarItem.color = 'red';
+        connectionStatusBarItem.tooltip = error.message ?? String(error);
+      } finally {
+        quickPick.hide();
       }
-      removeMpyFolder();
-      await new Promise(resolve => setTimeout(resolve, 300));
-      let connectTerminal = vscode.window.createTerminal('MPY Session');
-      connectTerminal.sendText(
-        `mpremote connect ${usedPort} exec "import os, gc; print(os.uname()); print('Free memory:', gc.mem_free())" + repl`
-      );
-      setTimeout(() => {
-        connectTerminal.show();
-      }, 1500);
-      quickPick.hide();
-    });
-    quickPick.onDidHide(() => {
-      stopScanning = true;
     });
     quickPick.show();
   });
   context.subscriptions.push(disposableSelectPort);
-  // --- Кінець оновленого коду вибору порту ---
 
-  // Реєструємо команду "mpytools.perl" для кнопки "перл"
-  vscode.commands.registerCommand('mpytools.perl', async (): Promise<void> => {
-    vscode.window.terminals
-      .filter(t => t.name.startsWith("MPY"))
-      .forEach(t => t.dispose());
-    const usedPort = (lastUsedPort === 'auto') ? 'auto' : formatPort(lastUsedPort);
-    let perlTerminal = vscode.window.createTerminal('MPY Perl');
-    perlTerminal.show();
-    perlTerminal.sendText(`mpremote connect ${usedPort} repl`);
-  });
+  const openRepl = async (): Promise<void> => {
+    await deviceSession.openRepl('MPY REPL');
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand('mpytools.connect', openRepl),
+    vscode.commands.registerCommand('mpytools.repl', openRepl),
+    vscode.commands.registerCommand('mpytools.perl', openRepl)
+  );
 
   // Команда "Run Active"
-  vscode.commands.registerCommand('mpytools.runActive', async (): Promise<void> => {
-    const terminalsToClose = vscode.window.terminals.filter(t =>
-      t.name.startsWith("MPY") && t.name !== "MPY Compile&download"
-    );
-    terminalsToClose.forEach(t => t.dispose());
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.runActive', async (): Promise<void> => {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       vscode.window.showWarningMessage("Немає активного файлу для запуску.");
@@ -342,137 +347,96 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const filePath = editor.document.uri.fsPath;
     mpyOutputChannel.appendLine("▶️ Run active file: " + filePath);
-    let runTerminal = vscode.window.createTerminal('MPY Run');
-    runTerminal.show();
-    runTerminal.sendText(`mpremote run "${filePath}"`);
-  });
+    await deviceSession.openRunFile(filePath);
+  }));
 
   // Команда "Stop"
-  vscode.commands.registerCommand('mpytools.stop', async (): Promise<void> => {
-    const terminal = vscode.window.activeTerminal;
-    if (terminal) {
-      terminal.sendText("\x03", false);
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.stop', async (): Promise<void> => {
+    if (deviceSession.stopInteractive()) {
       vscode.window.showInformationMessage("Stop: Ctrl-C відправлено. (Execution stopped)");
       mpyOutputChannel.appendLine("✋ Stop signal (Ctrl-C) sent.");
     } else {
       vscode.window.showWarningMessage("Немає активного термінала для зупинки.");
     }
-  });
+  }));
 
   // Команда "Reset Hard"
-  vscode.commands.registerCommand('mpytools.resetHard', async (): Promise<void> => {
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.resetHard', async (): Promise<void> => {
     try {
-      const terminalsToClose = vscode.window.terminals.filter(t =>
-        t.name.startsWith("MPY")
-      );
-      terminalsToClose.forEach(t => t.dispose());
-      const usedPort = (lastUsedPort === 'auto') ? 'auto' : formatPort(lastUsedPort);
       mpyOutputChannel.appendLine(`🔧 Hard Reset on port "${lastUsedPort}"`);
-      let resetTerminal = vscode.window.createTerminal('MPY Reset');
-      resetTerminal.show();
-      resetTerminal.sendText(`mpremote connect ${usedPort} reset`);
+      await deviceSession.run(['reset']);
       vscode.window.showInformationMessage(`Device hard-reset requested on port "${lastUsedPort}"`);
       mpyOutputChannel.appendLine("✅ Hard reset command sent.");
     } catch (err: any) {
       vscode.window.showErrorMessage("Failed to reset (hard-reset) device: " + err);
       mpyOutputChannel.appendLine("❌ Error resetting device: " + err.message);
     }
-  });
+  }));
 
   // Реєструємо "Compile & Run"
   const compileStatusBarItem = registerCompileAndRunCommand(
     context,
     mpyOutputChannel,
-    execPromise,
-    () => lastUsedPort,
+    deviceSession,
     () => selectedCompilationMethod,
     (val: string | undefined) => { selectedCompilationMethod = val; },
     needsRecompile,
     compilePyFile,
     compileFileToOutput,
     findPyFiles,
-    openTerminalAndRunMain,
-    formatPort,
     () => micropythonVersion,
     () => micropythonBytecodeVersion,
     () => micropythonArchitecture,
     () => micropythonMsmallIntBits
   );
-} // Кінець activate
 
-/**
- * Швидка функція: отримаємо сирі порти з `mpremote connect list`.
- */
-async function listRawPorts(): Promise<{ ports: string[]; errorMsg?: string }> {
-  return new Promise((resolve) => {
-    exec('mpremote connect list', (error, stdout, stderr) => {
-      if (error || stderr) {
-        resolve({
-          ports: [],
-          errorMsg: error?.message || stderr
-        });
-        return;
-      }
-      const lines = stdout.split('\n');
-      const allPorts: string[] = lines
-        .filter((line) => line.includes('COM') || line.includes('/dev/'))
-        .map((line) => line.trim().split(' ')[0])
-        .filter(Boolean);
-      resolve({
-        ports: allPorts
-      });
-    });
+  void deviceSession.restore().then(async (restored) => {
+    if (!restored) {
+      return;
+    }
+    lastUsedPort = deviceSession.currentPort();
+    try {
+      await fetchMicropythonVersionInfo(deviceSession);
+      compileStatusBarItem.show();
+      runStatusBarItem.show();
+      stopStatusBarItem.show();
+      perlStatusBarItem.show();
+      resetStatusBarItem.show();
+      connectionStatusBarItem.text = `$(check) ${micropythonSysName ?? 'MicroPython'} ${lastUsedPort}`;
+      connectionStatusBarItem.color = 'green';
+      connectionStatusBarItem.tooltip = `Restored ${describePort(restored) || restored.path}`;
+      void vscode.commands.executeCommand('mpytoolsFileExplorer.refresh');
+    } catch (error: any) {
+      connectionStatusBarItem.text = `$(warning) ${lastUsedPort}`;
+      connectionStatusBarItem.color = 'yellow';
+      connectionStatusBarItem.tooltip = `Saved device is unavailable: ${error.message}`;
+    }
   });
-}
-
-/**
- * Спроба отримати uname з порту: `mpremote connect <port> exec "import os; print(os.uname())"`.
- */
-async function tryGetDeviceInfo(port: string): Promise<{ sys: string; rel: string; mach: string } | null> {
-  const cmd = `mpremote connect ${port} exec "import os; print(os.uname())"`;
-  mpyOutputChannel.appendLine(`   🔎 Checking port: ${port} -> ${cmd}`);
-  try {
-    const deviceInfo = await execPromise(cmd);
-    let sysMatch = deviceInfo.match(/sysname='([^']+)'/);
-    let relMatch = deviceInfo.match(/release='([^']+)'/);
-    let machMatch = deviceInfo.match(/machine='([^']+)'/);
-    let sys = sysMatch ? sysMatch[1] : '';
-    let rel = relMatch ? relMatch[1] : '';
-    let mach = machMatch ? machMatch[1] : '';
-    if (!sys) { return null; }
-    return { sys, rel, mach };
-  } catch (err) {
-    return null;
-  }
-}
+} // Кінець activate
 
 /**
  * Отримати інформацію (версія, архітектура, ...).
  */
-async function fetchMicropythonVersionInfo(port: string): Promise<void> {
-  const cmd = `mpremote connect ${port} exec "` +
-    `import sys, os; ` +
-    `print('MPYVER:', sys.implementation.version); ` +
-    `print('MPYCODE:', sys.implementation._mpy); ` +
-    `arch_val = (sys.implementation._mpy >> 10); print('MPYARCH:', arch_val); ` +
-    `print('MAXSIZE:', sys.maxsize); ` +
-    `u=os.uname(); ` +
-    `print('SYSNAME:', u.sysname); ` +
-    `print('RELEASE:', u.release); ` +
-    `"`;
-  mpyOutputChannel.appendLine(`🔍 Fetching MicroPython info via: ${cmd}`);
+async function fetchMicropythonVersionInfo(deviceSession: DeviceSession): Promise<void> {
+  micropythonVersion = undefined;
+  micropythonBytecodeVersion = undefined;
+  micropythonArchitecture = undefined;
+  micropythonMsmallIntBits = undefined;
+  micropythonSysName = undefined;
+  micropythonRelease = undefined;
+  const code = [
+    'import sys, os',
+    "print('MPYVER:', sys.implementation.version)",
+    "print('MPYRAW:', getattr(sys.implementation, '_mpy', 0))",
+    "print('MAXSIZE:', sys.maxsize)",
+    'u=os.uname()',
+    "print('SYSNAME:', u.sysname)",
+    "print('RELEASE:', u.release)"
+  ].join('; ');
+  const result = await deviceSession.run(['exec', code], { timeoutMs: 20_000 });
+  const stdout = result.stdout;
 
-  return new Promise<void>((resolve, reject) => {
-    exec(cmd, (error, stdout, stderr) => {
-      if (error) {
-        mpyOutputChannel.appendLine("❌ Error running fetchMicropythonVersionInfo: " + error);
-        return reject(error);
-      }
-      if (stderr && stderr.trim()) {
-        mpyOutputChannel.appendLine("⚠️ Stderr in fetchMicropythonVersionInfo: " + stderr.trim());
-      }
-
-      const archMap: Record<number, string> = {
+  const archMap: Record<number, string> = {
         1: 'x86',
         2: 'x64',
         3: 'armv6',
@@ -483,42 +447,43 @@ async function fetchMicropythonVersionInfo(port: string): Promise<void> {
         8: 'armv7emdp',
         9: 'xtensa',
         10: 'xtensawin',
-        11: 'rv32imc'
-      };
+        11: 'rv32imc',
+        12: 'rv64imc'
+  };
 
-      function interpretMsmallIntBits(value: number): number | undefined {
-        if (value === 2147483647) {
+  function interpretMsmallIntBits(value: string): number | undefined {
+        if (value === '2147483647') {
           return 31;
         }
-        if (value === 9223372036854775807) {
+        if (value === '9223372036854775807') {
           return 63;
         }
-        if (value === 32767) {
+        if (value === '32767') {
           return 15;
         }
         return undefined;
-      }
+  }
 
-      let sysVal = 'unknown';
-      let relVal = 'unknown';
+  let sysVal = 'unknown';
+  let relVal = 'unknown';
 
-      const lines = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-      for (const line of lines) {
+  const lines = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
         if (line.startsWith("MPYVER:")) {
           micropythonVersion = line.replace("MPYVER:", "").trim();
           mpyOutputChannel.appendLine(`📌 micropythonVersion = ${micropythonVersion || 'none'}`);
-        } else if (line.startsWith("MPYCODE:")) {
-          let codeNum = parseInt(line.replace("MPYCODE:", "").trim(), 10);
-          if (isNaN(codeNum)) { codeNum = -1; }
-          micropythonBytecodeVersion = codeNum >= 0 ? codeNum : undefined;
+        } else if (line.startsWith("MPYRAW:")) {
+          const rawMpy = Number(line.replace("MPYRAW:", "").trim());
+          const abi = decodeMpyAbi(rawMpy);
+          micropythonBytecodeVersion = abi.bytecodeVersion;
+          micropythonArchitecture = abi.architectureCode === undefined
+            ? undefined
+            : archMap[abi.architectureCode];
           mpyOutputChannel.appendLine(`📌 micropythonBytecodeVersion = ${micropythonBytecodeVersion ?? 'none'}`);
-        } else if (line.startsWith("MPYARCH:")) {
-          const archNum = parseInt(line.replace("MPYARCH:", "").trim(), 10);
-          micropythonArchitecture = archMap[archNum] ?? undefined;
           mpyOutputChannel.appendLine(`📌 micropythonArchitecture = ${micropythonArchitecture || 'none'}`);
         } else if (line.startsWith("MAXSIZE:")) {
-          const maxsizeNum = parseInt(line.replace("MAXSIZE:", "").trim(), 10);
-          micropythonMsmallIntBits = !isNaN(maxsizeNum) ? interpretMsmallIntBits(maxsizeNum) : undefined;
+          const maxsizeValue = line.replace("MAXSIZE:", "").trim();
+          micropythonMsmallIntBits = interpretMsmallIntBits(maxsizeValue);
           mpyOutputChannel.appendLine(`📌 micropythonMsmallIntBits = ${micropythonMsmallIntBits ?? 'none'}`);
         } else if (line.startsWith("SYSNAME:")) {
           sysVal = line.replace("SYSNAME:", "").trim();
@@ -527,81 +492,10 @@ async function fetchMicropythonVersionInfo(port: string): Promise<void> {
           relVal = line.replace("RELEASE:", "").trim();
           mpyOutputChannel.appendLine(`📌 release = ${relVal}`);
         }
-      }
-
-      micropythonSysName = sysVal;
-      micropythonRelease = relVal;
-
-      resolve();
-    });
-  });
-}
-
-/**
- * Виконати exec з Promise
- */
-export function execPromise(command: string): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      if (stderr && stderr.trim()) {
-        reject(new Error(stderr));
-        return;
-      }
-      resolve(stdout);
-    });
-  });
-}
-
-/**
- * Прибираємо папку mpy (якщо існує)
- */
-function removeMpyFolder(): void {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders || workspaceFolders.length === 0) {
-    return;
-  }
-  const workspaceRoot = workspaceFolders[0].uri.fsPath;
-  const mpyPath = path.join(workspaceRoot, 'mpy');
-
-  if (!fs.existsSync(mpyPath)) {
-    return;
   }
 
-  mpyOutputChannel.appendLine("🗑 Removing 'mpy' folder from the project...");
-  removeFolderRecursive(mpyPath);
-  mpyOutputChannel.appendLine("✅ 'mpy' folder removed successfully.");
-  mpyOutputChannel.appendLine("");
-}
-
-function removeFolderRecursive(dirPath: string): void {
-  if (fs.existsSync(dirPath)) {
-    fs.readdirSync(dirPath).forEach((file) => {
-      const curPath = path.join(dirPath, file);
-      if (fs.lstatSync(curPath).isDirectory()) {
-        removeFolderRecursive(curPath);
-      } else {
-        fs.unlinkSync(curPath);
-      }
-    });
-    fs.rmdirSync(dirPath);
-  }
-}
-
-/**
- * Формат порту (Windows vs Linux)
- */
-function formatPort(port: string): string {
-  const platform = os.platform();
-  if (platform === 'win32') {
-    return port;
-  } else if (platform === 'linux' || platform === 'darwin') {
-    return `/dev/${port}`;
-  }
-  return port;
+  micropythonSysName = sysVal;
+  micropythonRelease = relVal;
 }
 
 /**
@@ -651,7 +545,7 @@ async function compileFileToOutput(sourcePath: string, outPath: string): Promise
   }
   args.push(sourcePath, '-o', outPath);
 
-  const bytecodeVersion = getSupportedBytecodeVersion(micropythonVersion);
+  const bytecodeVersion = micropythonBytecodeVersion ?? getSupportedBytecodeVersion(micropythonVersion);
   if (bytecodeVersion === undefined) {
     mpyOutputChannel.appendLine("⚠️ Warning: Bytecode not supported for this version of MicroPython. Using the current mpy-cross bytecode.");
   }
@@ -667,26 +561,6 @@ async function compileFileToOutput(sourcePath: string, outPath: string): Promise
     console.error(`[mpy-cross stderr] ${result.stderr.trim()}`);
   }
   return outPath;
-}
-
-/**
- * Запуск main.run() через mpremote
- */
-async function openTerminalAndRunMain(port: string, debugTerminal: vscode.Terminal): Promise<void> {
-  const connectTarget = port === 'auto' ? 'auto' : port;
-  mpyOutputChannel.appendLine(`⚙️ Opening REPL on port: ${connectTarget}`);
-  debugTerminal.sendText(`mpremote connect ${connectTarget} repl`);
-  await new Promise(resolve => setTimeout(resolve, 1500));
-  mpyOutputChannel.appendLine('⚙️ Sending Ctrl-C to ensure REPL prompt is ready');
-  debugTerminal.sendText('\x03', false);
-  await new Promise(resolve => setTimeout(resolve, 300));
-  debugTerminal.sendText('print("[MPyTools] REPL ready")');
-  mpyOutputChannel.appendLine(`⚙️ Importing main in REPL on port: ${connectTarget}`);
-  debugTerminal.sendText('import main');
-  await new Promise(resolve => setTimeout(resolve, 200));
-  mpyOutputChannel.appendLine(`⚙️ Running main.run() from REPL on port: ${connectTarget}`);
-  debugTerminal.sendText('print("[MPyTools] main.run()")');
-  debugTerminal.sendText('main.run()');
 }
 
 /**

@@ -36,6 +36,7 @@ interface NativeProbe {
 }
 
 const targetCache = new Map<string, Promise<MpyCrossTarget>>();
+let launcherHints: string[] = [];
 
 function execFilePromise(
   executable: string,
@@ -391,8 +392,12 @@ async function resolveMpyCrossTargetUncached(
   bytecodeVersion: number | string | undefined
 ): Promise<MpyCrossTarget> {
   const requestedBytecode = normalizeBytecodeVersion(bytecodeVersion);
-  const launcher = findExecutableOnPath('mpy-cross');
-  const nearbyRoots = launcher ? findMpyCrossPackageRootsNearLauncher(launcher) : [];
+  const pathLauncher = findExecutableOnPath('mpy-cross');
+  const launchers = [...launcherHints, ...(pathLauncher ? [pathLauncher] : [])]
+    .filter((candidate, index, values) => isFile(candidate) && values.indexOf(candidate) === index);
+  const nearbyRoots = uniqueExistingDirectories(
+    launchers.flatMap((launcher) => findMpyCrossPackageRootsNearLauncher(launcher))
+  );
 
   for (const packageRoot of nearbyRoots) {
     const target = await selectNativeTarget(packageRoot, requestedBytecode);
@@ -412,8 +417,12 @@ async function resolveMpyCrossTargetUncached(
     }
   }
 
-  if (launcher) {
-    return probeLauncher(launcher, requestedBytecode);
+  for (const launcher of launchers) {
+    try {
+      return await probeLauncher(launcher, requestedBytecode);
+    } catch {
+      // Try the next configured/system launcher.
+    }
   }
 
   throw new Error(
@@ -470,4 +479,10 @@ export function formatMpyCrossInvocation(result: MpyCrossRunResult): string {
 /** Test helper; also lets dependency installation recover without reloading VS Code. */
 export function resetMpyCrossResolver(): void {
   targetCache.clear();
+}
+
+/** Prefer extension-owned launchers without mutating the process-wide PATH. */
+export function setMpyCrossLauncherHints(hints: string[]): void {
+  launcherHints = [...hints];
+  resetMpyCrossResolver();
 }

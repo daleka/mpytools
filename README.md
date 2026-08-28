@@ -1,6 +1,68 @@
-MPyTools is a Visual Studio Code extension that simplifies working with MicroPython using mpremote. It automates compilation, uploading, and execution of code on a     microcontroller.  
+# MPyTools
 
-Project firmware versioning
+MPyTools is a Visual Studio Code extension for selecting a MicroPython device,
+using its REPL, managing files, compiling `.py` files to `.mpy`, uploading a
+project, and keeping local firmware snapshots.
+
+## First-time setup
+
+1. Install the extension and make sure Python 3 with `venv` support is available.
+2. Run **MPY: Install Managed Toolchain**. MPyTools creates an isolated Python
+   environment in VS Code extension storage and installs compatible `mpremote`
+   and `mpy-cross` versions there. It never installs into the system Python.
+3. Connect the board and run **MPY: Select Port**.
+4. If connection fails, run **MPY: Diagnostics** and inspect the MPyTools output.
+
+An existing `mpremote` from `PATH` is supported. A custom executable can be set
+with `mpytools.mpremotePath`. The explicit setting has priority, followed by the
+managed installation, `PATH`, and `python -m mpremote`.
+
+### Linux serial access
+
+MPyTools preserves absolute port paths returned by `mpremote`, such as
+`/dev/ttyACM0`, and remembers a device by USB serial number when one is exposed.
+It also reports whether a failure is caused by a missing port, permissions, a
+busy device, or a missing toolchain.
+
+On Debian/Ubuntu-style systems, serial users commonly need membership in the
+`dialout` group:
+
+```sh
+sudo usermod -aG dialout "$USER"
+```
+
+Log out and back in after changing group membership. Other distributions may
+use a different group or `uaccess` udev rules. A sandboxed VS Code installation
+must also be allowed to access USB/serial devices. The diagnostics command shows
+the current groups, visible ports, access mode, selected tool source, and a
+read-only connection check.
+
+## Toolchain and reinstall behaviour
+
+- Python packages are isolated from PEP 668/system-package restrictions.
+- Commands are started with argument arrays, not through a shell, so paths with
+  spaces and special characters work on Windows, Linux, and macOS.
+- Managed tools live in versioned extension storage and are reused after an
+  extension update. If an uninstall removes that storage, the extension detects
+  the missing tools and offers to recreate them.
+- Workspace stubs are installed only under `.mpytools/typings`; MPyTools does not
+  replace a user's `typings` folder or `pyproject.toml`.
+- Project ZIP files are created by the extension itself; an external `zip`
+  command is not required.
+
+## Main commands
+
+- **MPY: Select Port** — list ports reported by `mpremote` and validate the
+  selected MicroPython device.
+- **MPY: Open REPL** — open one MPyTools-owned interactive terminal.
+- **MPY: Run Active File** — run the current file without shell interpolation.
+- **MPY: Compile and Run** — build into `.mpytools/build`, upload, and start the
+  project.
+- **MPY: Install Workspace Stubs** — install project-local completion stubs.
+- **MPY: Diagnostics** — inspect toolchain and serial access without changing the
+  device.
+
+## Project firmware versioning
 
 Projects can opt in with a `.mpytools.json` file:
 
@@ -16,108 +78,30 @@ Projects can opt in with a `.mpytools.json` file:
 }
 ```
 
-Before `Compile & Run`, MPYTools runs the configured Python generator. A
-generation error stops the build. After a successful device upload, MPYTools
-stores one local source snapshot per firmware version so a tested build can be
-recovered even before it is pushed to Git.
-    
-    
+Before **Compile and Run**, MPyTools runs the configured generator. A generator
+error stops the build. After a successful upload, one local source snapshot per
+firmware version is retained.
 
-Dependencies   
-The extension requires the following dependencies:    
-✅ mpremote – for interacting with MicroPython   
-✅ mpy-cross – for compiling .py → .mpy   
-✅ zip – for project backup   
-✅ micropython-stubs – for autocompletion and type checking in VS Code   
-   
-    
-   
-Dependencies are automatically installed when running the "MPY: Install Dependencies" command for the first time.   
-   
-Features
+---
 
-🔹 Automatic compilation & upload – Only modified .py files are compiled into .mpy, and only updated files are uploaded to the device.
+## Українською
 
-🔹 Fast native compilation – Uses the native compiler from the installed `mpy_cross` package with safe bytecode-version selection and bounded parallel workers.
+MPyTools — розширення VS Code для вибору MicroPython-пристрою, REPL, керування
+файлами, компіляції `.py` у `.mpy`, завантаження проєкту та локальних знімків
+прошивки.
 
-🔹 Run code without copying – Execute .py files directly from the host machine.
+Для першого запуску встановіть Python 3 із підтримкою `venv`, виконайте
+**MPY: Install Managed Toolchain**, під'єднайте плату й оберіть
+**MPY: Select Port**. Інструменти встановлюються в ізольоване сховище
+розширення — системний Python і системні пакети не змінюються.
 
-🔹 Seamless integration with VS Code – Manage your microcontroller using status bar buttons.
+На Linux користувач зазвичай має входити до групи доступу до послідовних портів
+(часто `dialout`). Після додавання до групи потрібно вийти із сеансу та зайти
+знову. Для Flatpak/Snap також потрібен дозвіл на USB/serial. Команда
+**MPY: Diagnostics** показує групи користувача, права порту, джерело `mpremote`,
+видимі пристрої та результат безпечної перевірки підключення.
 
-🔹 Fast project backup – Easily archive your project into a .zip file.
-
-🔹 Board support – Tested on STM32, expected to work with ESP32, RP2040 (but not verified yet).
-
-🔹 Automatic installation of MicroPython Stubs – Adds autocompletion and type checking in VS Code (micropython-stubs).
-   
-  
-    
-Future Plans    
-🚀 Support for ESP32 and other MicroPython boards   
-🚀 Mounting local folders (paused due to mpremote limitations with .mpy files)   
-🚀 Expanding support for mpremote commands   
-    
-         
-           
-   
-Who is this extension for?    
-✔ Developers working with MicroPython    
-✔ Beginners looking for a quick setup   
-✔ Users of STM32, ESP32, RP2040, and similar boards    
-     
-I’d appreciate any feedback or suggestions!    
-   
-
-Urkaine   
--------
-      
-MPyTools – це розширення для Visual Studio Code, яке спрощує роботу з MicroPython за допомогою mpremote. Воно автоматизує компіляцію, завантаження та виконання коду на          мікроконтролері.       
-    
-    
-    
-    
-Залежності    
-Розширення потребує встановлених:    
-✅ mpremote – для взаємодії з MicroPython     
-✅ mpy-cross – для компіляції .py → .mpy      
-✅ zip – для резервного копіювання      
-✅ micropython-stubs – для автодоповнення та перевірки типів у VS Code     
-    
-    
-          
-Залежності встановлюються автоматично під час першого запуску команди "MPY: Встановити залежності".    
-     
-             
-Можливості
-
-🔹 Автоматична компіляція та завантаження – лише змінені .py файли компілюються в .mpy, і лише оновлені файли завантажуються на пристрій.
-
-🔹 Швидка нативна компіляція – використовується нативний компілятор із пакета `mpy_cross` із коректним вибором версії bytecode та обмеженою паралельною обробкою.
-
-🔹 Запуск коду без копіювання – можна виконувати .py файли безпосередньо з ПК.
-
-🔹 Зручна інтеграція у VS Code – керування мікроконтролером через кнопки у статус-барі.
-
-🔹 Резервне копіювання – можливість швидко архівувати проєкт у .zip файл.
-
-🔹 Підтримка плат – протестовано на STM32, очікується сумісність з ESP32, RP2040 (але поки що не перевірено).
-
-🔹 Автоматичне встановлення MicroPython Stubs – додає автодоповнення та перевірку типів у VS Code (micropython-stubs).
-      
-    
-    
-Плани на майбутнє    
-🚀 Підтримка ESP32 та інших плат під MicroPython    
-🚀 Монтування локальних папок (відкладено через mpremote і його обмеження роботи з .mpy файлами)    
-🚀 Розширення команд для mpremote    
-    
-
-               
-Для кого це розширення?   
-✔ Розробників, які працюють з MicroPython   
-✔ Початківців, які хочуть швидко налаштувати середовище   
-✔ Користувачів STM32, ESP32, RP2040 та подібних плат   
-    
-        
-            
-Буду радий будь-яким відгукам і пропозиціям!
+Абсолютний шлях `/dev/ttyACM0` більше не перетворюється на
+`/dev//dev/ttyACM0`. Якщо плата повідомляє серійний номер, вибір зберігається за
+ним, тому перепідключення або зміна номера `ttyACM*` не прив'язує розширення до
+чужого пристрою.
