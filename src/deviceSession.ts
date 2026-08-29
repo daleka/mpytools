@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DeviceCommandError, MpremoteService } from './mpremoteService';
 import { normalizePortTarget, SerialPortDescriptor, stablePortTarget } from './ports';
+import { triggerReplInjection } from './replControl';
 
 const SELECTED_PORT_KEY = 'mpytools.selectedPort.v2';
 
@@ -87,7 +88,18 @@ export class DeviceSession implements vscode.Disposable {
     if (injectCode) {
       args.push('--inject-code', injectCode);
     }
-    return this.exclusive(() => this.openCommandTerminal(name, args));
+    return this.exclusive(async () => {
+      const terminal = await this.openCommandTerminal(name, args);
+      if (injectCode) {
+        // mpremote's --inject-code only registers the code behind Ctrl-J; it
+        // does not execute it automatically. Wait until VS Code has created
+        // the terminal process and mpremote has entered its console, interrupt
+        // any program already running on the board, then trigger injection.
+        await waitForTerminalProcess(terminal);
+        await triggerReplInjection(terminal);
+      }
+      return terminal;
+    });
   }
 
   async openRunFile(filePath: string, name = 'MPY Run'): Promise<vscode.Terminal> {
@@ -152,4 +164,11 @@ export class DeviceSession implements vscode.Disposable {
     this.operationQueue = next.then(() => undefined, () => undefined);
     return next;
   }
+}
+
+async function waitForTerminalProcess(terminal: vscode.Terminal, timeoutMs = 3_000): Promise<void> {
+  await Promise.race([
+    Promise.resolve(terminal.processId).then(() => undefined, () => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
+  ]);
 }

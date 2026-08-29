@@ -12,6 +12,7 @@ import {
   stablePortTarget
 } from '../ports';
 import { runProcess } from '../processRunner';
+import { triggerReplInjection } from '../replControl';
 import {
   assertUniqueOutputPaths,
   collectSourceInventory,
@@ -70,6 +71,26 @@ suite('MPyTools core', () => {
       source: 'configured'
     }, [dangerousArgument]);
     assert.strictEqual(result.stdout, dangerousArgument);
+  });
+
+  test('interrupts a running board before triggering mpremote code injection', async () => {
+    const events: string[] = [];
+    await triggerReplInjection(
+      {
+        sendText(text, shouldExecute) {
+          events.push(`send:${text.charCodeAt(0)}:${String(shouldExecute)}`);
+        }
+      },
+      async (milliseconds) => {
+        events.push(`wait:${milliseconds}`);
+      }
+    );
+    assert.deepStrictEqual(events, [
+      'wait:1500',
+      'send:3:false',
+      'wait:300',
+      'send:10:false'
+    ]);
   });
 
   test('keeps build artifacts outside the workspace and isolates project caches', () => {

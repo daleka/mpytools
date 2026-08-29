@@ -59,8 +59,9 @@ export function registerCompileAndRunCommand(
   compileStatusBarItem.hide();
   context.subscriptions.push(compileStatusBarItem);
 
-  // OutputChannel already follows new output when visible. Forcing a VS Code
-  // command per line floods the shared Extension Host on larger projects.
+  // Once VS Code's Output cursor is on its last line, the Output view follows
+  // appended content natively. Avoid issuing a UI command for every log line:
+  // that floods the shared Extension Host on larger projects.
   function logBuildLine(message: string): void {
     outputChannel.appendLine(message);
   }
@@ -189,7 +190,7 @@ export function registerCompileAndRunCommand(
 
     await deviceSession.closeInteractiveTerminal();
 
-    outputChannel.show(false);
+    await showBuildOutputAtEnd(outputChannel);
     logBuildLine("🔹 Starting Compile & Run...");
     logBuildLine(`   - Selected method: ${currentMethod === 'none' ? 'No Compilation' : 'Optimization O' + currentMethod}`);
     logBuildLine(`   - Non-.py mode: ${shouldWrapNonPy ? 'Wrap into .py' : 'Keep as-is'}`);
@@ -476,6 +477,22 @@ export function registerCompileAndRunCommand(
 
   context.subscriptions.push(disposableCompileAndRun);
   return compileStatusBarItem;
+}
+
+async function showBuildOutputAtEnd(outputChannel: vscode.OutputChannel): Promise<void> {
+  outputChannel.show(false);
+
+  // OutputChannel.show() is intentionally fire-and-forget in the VS Code API.
+  // Yield once so its Output editor is focused, then move its cursor to the
+  // final line. Current VS Code versions use that position to release the
+  // smart-scroll lock and follow all subsequent appendLine() calls natively.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  try {
+    await vscode.commands.executeCommand('cursorBottom');
+  } catch {
+    // Appending still works on VS Code variants where the editor command is
+    // unavailable; only the explicit smart-scroll reset is skipped.
+  }
 }
 
 function createThrottledProgressReporter(

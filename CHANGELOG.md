@@ -6,6 +6,14 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.3]
+
+- Automatically trigger `mpremote repl --inject-code` after the terminal
+  process starts, so **Compile & Run** launches `main.run()` immediately.
+- Restore live build-log following by resetting the Output cursor once at the
+  start of a build and then using VS Code's native auto-scroll, without the
+  per-line UI command flood that caused compilation freezes.
+
 ## [0.4.2]
 
 - Prefer the current managed `mpy-cross` when it emits the device's requested
