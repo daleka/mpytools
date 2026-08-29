@@ -383,11 +383,11 @@ export function activate(context: vscode.ExtensionContext): void {
     needsRecompile,
     compilePyFile,
     compileFileToOutput,
-    findPyFiles,
-    () => micropythonVersion,
-    () => micropythonBytecodeVersion,
-    () => micropythonArchitecture,
-    () => micropythonMsmallIntBits
+    () => ({
+      bytecodeVersion: micropythonBytecodeVersion,
+      architecture: micropythonArchitecture,
+      smallIntBits: micropythonMsmallIntBits
+    })
   );
 
   void deviceSession.restore().then(async (restored) => {
@@ -527,7 +527,7 @@ async function compilePyFile(
 
 /** Compile one source file using the package's native binary whenever possible. */
 async function compileFileToOutput(sourcePath: string, outPath: string): Promise<string> {
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
 
   const args: string[] = [];
   if (micropythonArchitecture) {
@@ -551,8 +551,12 @@ async function compileFileToOutput(sourcePath: string, outPath: string): Promise
   }
 
   const result = await runMpyCross(args, bytecodeVersion);
+  const hostLag = result.maxEventLoopDelayMs >= 250
+    ? `, Extension Host lag ${result.maxEventLoopDelayMs.toFixed(1)} ms`
+    : '';
   mpyOutputChannel.appendLine(
-    `⚙️ mpy-cross [${result.target.mode}, ${result.durationMs.toFixed(1)} ms]: ${formatMpyCrossInvocation(result)}`
+    `⚙️ mpy-cross [${result.target.mode}, ${result.durationMs.toFixed(1)} ms${hostLag}]: `
+    + formatMpyCrossInvocation(result)
   );
   if (result.stdout.trim()) {
     console.log(`[mpy-cross stdout] ${result.stdout.trim()}`);
@@ -561,30 +565,6 @@ async function compileFileToOutput(sourcePath: string, outPath: string): Promise
     console.error(`[mpy-cross stderr] ${result.stderr.trim()}`);
   }
   return outPath;
-}
-
-/**
- * Знаходимо всі .py файли рекурсево
- */
-function findPyFiles(rootDir: string, ignoreList: string[] = []): string[] {
-  let results: string[] = [];
-  function recurse(dir: string) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (let entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        recurse(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith('.py')) {
-        if (!ignoreList.includes(entry.name)) {
-          results.push(fullPath);
-        }
-      }
-    }
-  }
-  if (fs.existsSync(rootDir)) {
-    recurse(rootDir);
-  }
-  return results;
 }
 
 /**

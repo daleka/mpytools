@@ -56,8 +56,10 @@ read-only connection check.
   selected MicroPython device.
 - **MPY: Open REPL** — open one MPyTools-owned interactive terminal.
 - **MPY: Run Active File** — run the current file without shell interpolation.
-- **MPY: Compile and Run** — build into `.mpytools/build`, upload, and start the
-  project.
+- **MPY: Compile and Run** — build in VS Code's workspace-scoped extension
+  storage, upload, and start the project. Generated build files stay outside the
+  workspace so file watchers, Git integrations, and language servers do not
+  rescan the project during compilation.
 - **MPY: Install Workspace Stubs** — install project-local completion stubs.
 - **MPY: Diagnostics** — inspect toolchain and serial access without changing the
   device.
@@ -82,6 +84,16 @@ Before **Compile and Run**, MPyTools runs the configured generator. A generator
 error stops the build. After a successful upload, one local source snapshot per
 firmware version is retained.
 
+### Build inputs and assets
+
+MPyTools never compiles Python caches or generated development folders such as
+`__pycache__`, `*.pyc`, `.venv`, `.git`, `node_modules`, and test/tool caches.
+When non-`.py` wrapping is enabled, only extensions listed in
+`mpytools.wrappableAssetExtensions` are converted into importable modules.
+Other resources, including binary files, are copied unchanged. Build caches are
+automatically invalidated when the extension version, compiler settings, asset
+settings, or MicroPython ABI changes.
+
 ---
 
 ## Українською
@@ -105,3 +117,10 @@ MPyTools — розширення VS Code для вибору MicroPython-при
 `/dev//dev/ttyACM0`. Якщо плата повідомляє серійний номер, вибір зберігається за
 ним, тому перепідключення або зміна номера `ttyACM*` не прив'язує розширення до
 чужого пристрою.
+
+Проміжні файли компіляції зберігаються поза робочим каталогом у сховищі VS Code,
+тому інші розширення не перескановують проєкт після кожного створеного файла.
+Каталоги `__pycache__`, файли `*.pyc`, віртуальні середовища, приховані каталоги
+та кеші інструментів не потрапляють до прошивки. Перелік ресурсів, які можна
+перетворювати на Python-модулі, задається параметром
+`mpytools.wrappableAssetExtensions`; решта ресурсів копіюється без змін.

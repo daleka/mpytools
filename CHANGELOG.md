@@ -6,6 +6,20 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.1]
+
+- Move compilation output and generated asset wrappers completely out of the
+  workspace into VS Code's workspace-scoped extension storage.
+- Ignore `__pycache__`, `*.pyc`, virtual environments, tool caches, hidden
+  directories, and symlinks while enumerating project sources.
+- Wrap only explicitly configured text/resource extensions and copy unknown or
+  binary assets unchanged.
+- Remove per-line Output scroll commands and throttle progress updates to keep
+  the Extension Host responsive on large projects.
+- Add build-cache invalidation for extension, compiler, asset, and target ABI
+  changes, plus Extension Host lag diagnostics around `mpy-cross`.
+- Reject colliding asset outputs instead of silently overwriting them.
+
 ## [0.4.0]
 
 - Fix Linux absolute serial paths being expanded from `/dev/ttyACM0` to

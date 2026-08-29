@@ -2,7 +2,7 @@
   "name": "mpytools",
   "displayName": "MPyTools",
   "description": "MPyTools – просте та гнучке розширення для роботи з MicroPython у VS Code. | MPyTools – a simple and flexible extension for working with MicroPython in VS Code.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "preview": true,
   "publisher": "daleka",
   "repository": {
@@ -120,6 +120,32 @@
           "default": "",
           "scope": "machine",
           "description": "Optional absolute path to an mpremote executable. This explicit override takes priority over managed and PATH installations."
+        },
+        "mpytools.wrappableAssetExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\.?[A-Za-z0-9_-]+$"
+          },
+          "default": [
+            ".cfg",
+            ".css",
+            ".csv",
+            ".htm",
+            ".html",
+            ".ini",
+            ".js",
+            ".json",
+            ".md",
+            ".svg",
+            ".toml",
+            ".txt",
+            ".xml",
+            ".yaml",
+            ".yml"
+          ],
+          "scope": "resource",
+          "description": "File extensions that MPyTools may wrap into importable Python modules when non-.py compilation is enabled. Other assets are copied unchanged. Generated Python caches are always ignored."
         }
       }
     },

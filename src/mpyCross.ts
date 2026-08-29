@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { monitorEventLoopDelay } from 'perf_hooks';
 
 const EXEC_TIMEOUT_MS = 10_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -22,6 +23,7 @@ export interface MpyCrossRunResult {
   stdout: string;
   stderr: string;
   durationMs: number;
+  maxEventLoopDelayMs: number;
 }
 
 interface ProcessResult {
@@ -453,16 +455,26 @@ export async function runMpyCross(
 ): Promise<MpyCrossRunResult> {
   const target = await resolveMpyCrossTarget(bytecodeVersion);
   const invocationArgs = [...target.prefixArgs, ...args];
+  const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+  eventLoopDelay.enable();
   const startedAt = process.hrtime.bigint();
-  const result = await execFilePromise(target.executable, invocationArgs, cwd);
-  const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-  return {
-    target,
-    args: invocationArgs,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    durationMs
-  };
+  try {
+    const result = await execFilePromise(target.executable, invocationArgs, cwd);
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    const maxEventLoopDelayMs = Number.isFinite(eventLoopDelay.max)
+      ? eventLoopDelay.max / 1_000_000
+      : 0;
+    return {
+      target,
+      args: invocationArgs,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      durationMs,
+      maxEventLoopDelayMs
+    };
+  } finally {
+    eventLoopDelay.disable();
+  }
 }
 
 function quoteCommandArgument(argument: string): string {
