@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { DeviceCommandError, MpremoteService } from './mpremoteService';
 import { normalizePortTarget, SerialPortDescriptor, stablePortTarget } from './ports';
-import { triggerReplInjection } from './replControl';
+import { runReplCommands } from './replControl';
 
 const SELECTED_PORT_KEY = 'mpytools.selectedPort.v2';
 
@@ -83,20 +83,15 @@ export class DeviceSession implements vscode.Disposable {
     });
   }
 
-  async openRepl(name = 'MPY REPL', injectCode?: string): Promise<vscode.Terminal> {
+  async openRepl(name = 'MPY REPL', startupCommands: readonly string[] = []): Promise<vscode.Terminal> {
     const args = ['connect', this.connectTarget(), 'repl'];
-    if (injectCode) {
-      args.push('--inject-code', injectCode);
-    }
     return this.exclusive(async () => {
       const terminal = await this.openCommandTerminal(name, args);
-      if (injectCode) {
-        // mpremote's --inject-code only registers the code behind Ctrl-J; it
-        // does not execute it automatically. Wait until VS Code has created
-        // the terminal process and mpremote has entered its console, interrupt
-        // any program already running on the board, then trigger injection.
+      if (startupCommands.length > 0) {
+        // Restore the proven legacy launch flow: wait for mpremote's console,
+        // interrupt any running program, then submit ordinary REPL commands.
         await waitForTerminalProcess(terminal);
-        await triggerReplInjection(terminal);
+        await runReplCommands(terminal, startupCommands);
       }
       return terminal;
     });

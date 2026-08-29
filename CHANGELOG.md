@@ -8,8 +8,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [0.4.3]
 
-- Automatically trigger `mpremote repl --inject-code` after the terminal
-  process starts, so **Compile & Run** launches `main.run()` immediately.
+- Restore the proven REPL startup sequence used by earlier MPyTools releases:
+  wait for `mpremote`, send `Ctrl-C`, then submit `import main` and `main.run()`
+  as ordinary REPL commands so **Compile & Run** starts the project reliably.
 - Restore live build-log following by resetting the Output cursor once at the
   start of a build and then using VS Code's native auto-scroll, without the
   per-line UI command flood that caused compilation freezes.

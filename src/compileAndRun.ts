@@ -462,7 +462,12 @@ export function registerCompileAndRunCommand(
       // 2.8 Запускаємо main
       await deviceSession.openRepl(
         'MPY Debugging',
-        'import main\nprint("[MPyTools] main.run()")\nmain.run()\n'
+        [
+          'print("[MPyTools] REPL ready")',
+          'import main',
+          'print("[MPyTools] main.run()")',
+          'main.run()'
+        ]
       );
       });
     } catch (error: any) {
