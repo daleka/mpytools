@@ -11,6 +11,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - Prefer the current managed `mpy-cross` when it emits the device's requested
   bytecode ABI, using archived compilers only as compatibility fallbacks. This
   preserves newer MicroPython syntax such as adjacent f-string concatenation.
+- Replace the Marketplace extension icon with the new MPyTools artwork.
 
 ## [0.4.1]
 
