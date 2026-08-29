@@ -19,7 +19,8 @@ export class ProcessExecutionError extends Error {
     public readonly args: readonly string[],
     public readonly stdout: string,
     public readonly stderr: string,
-    public readonly code?: string | number
+    public readonly code?: string | number,
+    public readonly timedOut = false
   ) {
     super(message);
     this.name = 'ProcessExecutionError';
@@ -32,6 +33,7 @@ export function runProcess(
   options: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}
 ): Promise<ProcessResult> {
   const invocationArgs = [...target.prefixArgs, ...args];
+  const timeoutMs = options.timeoutMs ?? 20_000;
   return new Promise((resolve, reject) => {
     execFile(
       target.executable,
@@ -39,21 +41,25 @@ export function runProcess(
       {
         cwd: options.cwd,
         env: options.env,
-        timeout: options.timeoutMs ?? 20_000,
+        timeout: timeoutMs,
         maxBuffer: 16 * 1024 * 1024,
         windowsHide: true
       },
       (error, stdout, stderr) => {
         if (error) {
           const errorCode = 'code' in error ? (error.code ?? undefined) : undefined;
-          const details = stderr.trim() || stdout.trim() || error.message;
+          const timedOut = Boolean(error.killed && error.signal === 'SIGTERM' && timeoutMs > 0);
+          const details = timedOut
+            ? `Command timed out after ${Math.ceil(timeoutMs / 1_000)} seconds.`
+            : (stderr.trim() || stdout.trim() || error.message);
           reject(new ProcessExecutionError(
             details,
             target.executable,
             invocationArgs,
             stdout,
             stderr,
-            errorCode
+            errorCode,
+            timedOut
           ));
           return;
         }

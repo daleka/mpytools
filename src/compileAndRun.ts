@@ -11,6 +11,7 @@ import {
   collectSourceInventory,
   DEFAULT_WRAPPABLE_ASSET_EXTENSIONS,
   ensureParentDirectories,
+  estimateUploadTimeoutMs,
   isRootStartupPythonFile,
   normalizeAssetExtensions,
   resolveBuildStoragePaths
@@ -469,14 +470,22 @@ export function registerCompileAndRunCommand(
       let copyPath: string;
       copyPath = os.platform() === 'win32' ? `${mpyPath}\\.` : `${mpyPath}/.`;
 
+      const transferStats = await getFolderTransferStats(mpyPath);
+      const uploadTimeoutMs = estimateUploadTimeoutMs(transferStats.totalBytes, transferStats.fileCount);
+
       logBuildLine("🔹 Copying files to device...");
+      logBuildLine(
+        `   - Payload: ${(transferStats.totalBytes / 1024).toFixed(2)} KB in ${transferStats.fileCount} files`
+      );
+      logBuildLine(`   - Upload timeout: ${Math.ceil(uploadTimeoutMs / 1_000)} seconds`);
       try {
-        await deviceSession.run(['fs', 'cp', '-r', copyPath, ':/'], { timeoutMs: 120_000 });
+        await deviceSession.run(['fs', 'cp', '-r', copyPath, ':/'], { timeoutMs: uploadTimeoutMs });
         vscode.window.showInformationMessage('Copy complete.');
         logBuildLine("   ✅ Copy complete.");
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Error copying files: ${err}`);
-        logBuildLine(`   ❌ Error copying files: ${err.message}`);
+        const message = err.message ?? String(err);
+        vscode.window.showErrorMessage(`Error copying files: ${message}`);
+        logBuildLine(`   ❌ Error copying files: ${message}`);
         compileStatusBarItem.text = '$(rocket)Compile&Run';
         compileStatusBarItem.color = '#00BFFF';
         return;
@@ -512,8 +521,7 @@ export function registerCompileAndRunCommand(
       }
 
       // 2.7 (Опційно) Оцінимо розмір скопійованої теки
-      const folderSizeKB = await getFolderSizeKB(mpyPath);
-      logBuildLine(`🔹 Total size of uploaded folder: ${folderSizeKB.toFixed(2)} KB`);
+      logBuildLine(`🔹 Total size of uploaded folder: ${(transferStats.totalBytes / 1024).toFixed(2)} KB`);
       logBuildLine(
         entryPoint === 'python'
           ? '🔹 Soft-resetting device; MicroPython will execute /main.py...'
@@ -776,8 +784,11 @@ async function compileNonPyFileAsAsset(
 /**
  * Підраховує розмір тек у KB (рекурсивно).
  */
-async function getFolderSizeKB(dirPath: string): Promise<number> {
-  let totalSize = 0;
+async function getFolderTransferStats(
+  dirPath: string
+): Promise<{ totalBytes: number; fileCount: number }> {
+  let totalBytes = 0;
+  let fileCount = 0;
   async function recurse(folder: string): Promise<void> {
     if (!fs.existsSync(folder)) {
       return;
@@ -789,10 +800,11 @@ async function getFolderSizeKB(dirPath: string): Promise<number> {
       if (stats.isDirectory()) {
         await recurse(fullPath);
       } else {
-        totalSize += stats.size;
+        totalBytes += stats.size;
+        fileCount++;
       }
     }
   }
   await recurse(dirPath);
-  return totalSize / 1024;
+  return { totalBytes, fileCount };
 }

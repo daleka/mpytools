@@ -12,7 +12,7 @@ import {
   parseMpremotePortList,
   stablePortTarget
 } from '../ports';
-import { runProcess } from '../processRunner';
+import { ProcessExecutionError, runProcess } from '../processRunner';
 import { restartMicroPythonInRepl, runReplCommands } from '../replControl';
 import {
   conflictingProjectEntryPoint,
@@ -22,6 +22,7 @@ import {
 import {
   assertUniqueOutputPaths,
   collectSourceInventory,
+  estimateUploadTimeoutMs,
   isPathInside,
   isRootStartupPythonFile,
   resolveBuildStoragePaths
@@ -78,6 +79,19 @@ suite('MPyTools core', () => {
       source: 'configured'
     }, [dangerousArgument]);
     assert.strictEqual(result.stdout, dangerousArgument);
+  });
+
+  test('reports process timeouts explicitly instead of losing the root cause', async () => {
+    await assert.rejects(
+      runProcess(
+        { executable: process.execPath, prefixArgs: [], source: 'configured' },
+        ['-e', 'setTimeout(() => {}, 1000)'],
+        { timeoutMs: 25 }
+      ),
+      (error: unknown) => error instanceof ProcessExecutionError
+        && error.timedOut
+        && /timed out after 1 seconds/u.test(error.message)
+    );
   });
 
   test('batches log lines into one Output update and never loses a pending block', () => {
@@ -228,6 +242,14 @@ suite('MPyTools core', () => {
     assert.strictEqual(isRootStartupPythonFile(sourceRoot, path.join(sourceRoot, 'main.py')), true);
     assert.strictEqual(isRootStartupPythonFile(sourceRoot, path.join(sourceRoot, 'lib', 'main.py')), false);
     assert.strictEqual(isRootStartupPythonFile(sourceRoot, path.join(sourceRoot, 'worker.py')), false);
+  });
+
+  test('scales serial upload timeouts with payload size and file count', () => {
+    assert.strictEqual(estimateUploadTimeoutMs(0, 0), 120_000);
+    const projectTimeout = estimateUploadTimeoutMs(406_424, 90);
+    assert.ok(projectTimeout > 8 * 60_000);
+    assert.ok(projectTimeout <= 15 * 60_000);
+    assert.strictEqual(estimateUploadTimeoutMs(Number.POSITIVE_INFINITY, -1), 120_000);
   });
 
   test('keeps build artifacts outside the workspace and isolates project caches', () => {

@@ -6,6 +6,17 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.7]
+
+- Replace the fixed 120-second project-upload deadline with a bounded dynamic
+  timeout based on payload bytes and file count. Large serial uploads are no
+  longer terminated near completion on slower boards.
+- Report an explicit timeout duration when a managed process exceeds its
+  deadline instead of displaying an empty generic command failure.
+- Make recursive folder deletion and full device cleanup atomic device
+  operations so **Compile & Run** cannot interleave with a cleanup and upload
+  files that the still-running cleanup immediately removes.
+
 ## [0.4.6]
 
 - Resolve every project-scoped command from the active editor's workspace

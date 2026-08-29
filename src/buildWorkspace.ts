@@ -4,6 +4,12 @@ import * as path from 'path';
 
 export const BUILD_CACHE_SCHEMA = 'build-cache-v2';
 
+const MIN_UPLOAD_TIMEOUT_MS = 120_000;
+const MAX_UPLOAD_TIMEOUT_MS = 15 * 60_000;
+const UPLOAD_CONNECT_ALLOWANCE_MS = 30_000;
+const UPLOAD_PER_FILE_ALLOWANCE_MS = 1_000;
+const CONSERVATIVE_UPLOAD_BYTES_PER_SECOND = 1_024;
+
 export const DEFAULT_WRAPPABLE_ASSET_EXTENSIONS = [
   '.cfg',
   '.css',
@@ -75,6 +81,20 @@ export function isPathInside(parentPath: string, candidatePath: string): boolean
 export function isRootStartupPythonFile(sourceRoot: string, filePath: string): boolean {
   const relativePath = path.relative(sourceRoot, filePath);
   return relativePath === 'main.py' || relativePath === 'boot.py';
+}
+
+/**
+ * Serial filesystem uploads can be much slower than the UART line rate because
+ * every file and block crosses the raw-REPL protocol. Scale the timeout with
+ * both payload size and file count instead of imposing one fixed deadline.
+ */
+export function estimateUploadTimeoutMs(totalBytes: number, fileCount: number): number {
+  const safeBytes = Math.max(0, Number.isFinite(totalBytes) ? totalBytes : 0);
+  const safeFiles = Math.max(0, Number.isFinite(fileCount) ? fileCount : 0);
+  const estimated = UPLOAD_CONNECT_ALLOWANCE_MS
+    + Math.ceil(safeBytes / CONSERVATIVE_UPLOAD_BYTES_PER_SECOND) * 1_000
+    + Math.ceil(safeFiles) * UPLOAD_PER_FILE_ALLOWANCE_MS;
+  return Math.max(MIN_UPLOAD_TIMEOUT_MS, Math.min(MAX_UPLOAD_TIMEOUT_MS, estimated));
 }
 
 /**

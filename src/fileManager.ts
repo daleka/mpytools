@@ -358,34 +358,10 @@ async function uploadDeviceFile(localPath: string, devicePath: string): Promise<
 
 /** Рекурсивне видалення папки на пристрої з детальним логуванням */
 async function deleteDeviceFolderRecursively(folderPath: string): Promise<void> {
-  let output: string;
-  try {
-    output = await runMpremote(['fs', 'ls', getRemoteFilePath(folderPath)]);
-  } catch (err: any) {
-    throw new Error(`Failed to list folder contents: ${err.message}`);
-  }
-  const lines = output.split('\n').map(line => line.trim()).filter(line => line !== '' && !line.startsWith('ls :'));
-  for (const line of lines) {
-    const entry = parseFileSystemEntry(line);
-    if (!entry) {
-      continue;
-    }
-    const { name: entryName, isDirectory: isDir } = entry;
-    if (!isValidDeviceEntryName(entryName)) {
-      mpyOutputChannel.appendLine(`⚠️ Ignoring unsafe device entry: ${JSON.stringify(entryName)}`);
-      continue;
-    }
-    const childPath = folderPath.endsWith('/') ? folderPath + entryName : folderPath + '/' + entryName;
-    if (isDir) {
-      await deleteDeviceFolderRecursively(childPath);
-    } else {
-      mpyOutputChannel.appendLine(`Deleting file: ${childPath}`);
-      await runMpremote(['fs', 'rm', getRemoteFilePath(childPath)]);
-      mpyOutputChannel.appendLine(`Deleted file: ${childPath}`);
-    }
-  }
   mpyOutputChannel.appendLine(`Deleting folder: ${folderPath}`);
-  await runMpremote(['fs', 'rmdir', getRemoteFilePath(folderPath)]);
+  // Keep the complete recursive deletion inside one mpremote process so other
+  // MPyTools commands cannot be interleaved between individual files.
+  await runMpremote(['fs', 'rm', '-r', getRemoteFilePath(folderPath)], 5 * 60_000);
   mpyOutputChannel.appendLine(`Deleted folder: ${folderPath}`);
 }
 
@@ -394,43 +370,26 @@ async function clearDevice(): Promise<void> {
   // Якщо пристрій є Pyboard, використовуємо '/flash/' (з фінальним слешем) як корінь
   const isPyboard = micropythonSysName && micropythonSysName.toLowerCase().includes("pyboard");
   const rootPath = isPyboard ? '/flash/' : '/';
-  let output: string;
-  try {
-    output = await runMpremote(['fs', 'ls', getRemoteFilePath(rootPath) || ':']);
-  } catch (error: any) {
-    throw new Error(`Failed to list device root: ${error.message}`);
-  }
-  const lines = output
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line !== '' && !line.startsWith('ls :'));
-  for (const line of lines) {
-    const entry = parseFileSystemEntry(line);
-    if (!entry) {
-      continue;
-    }
-    const { name: entryName, isDirectory: isDir } = entry;
-    if (!isValidDeviceEntryName(entryName)) {
-      mpyOutputChannel.appendLine(`⚠️ Ignoring unsafe device entry: ${JSON.stringify(entryName)}`);
-      continue;
-    }
-    
-    // Якщо файл називається "System" (без врахування регістру), пропускаємо його
-    if (!isDir && entryName.toLowerCase() === 'system') {
-      mpyOutputChannel.appendLine(`Skipping system file: ${rootPath}${entryName}`);
-      continue;
-    }
-    
-    // Формуємо повний шлях на основі кореня (для Pyboard це буде '/flash/...')
-    const fullEntryPath = rootPath.endsWith('/') ? `${rootPath}${entryName}` : `${rootPath}/${entryName}`;
-    if (isDir) {
-      await deleteDeviceFolderRecursively(fullEntryPath);
-    } else {
-      mpyOutputChannel.appendLine(`Deleting file: ${fullEntryPath}`);
-      await runMpremote(['fs', 'rm', getRemoteFilePath(fullEntryPath)]);
-      mpyOutputChannel.appendLine(`Deleted file: ${fullEntryPath}`);
-    }
-  }
+  const script = [
+    'import os',
+    'def _mpytools_remove(path):',
+    '    try:',
+    '        names = os.listdir(path)',
+    '    except OSError:',
+    '        os.remove(path)',
+    '        return',
+    '    for name in names:',
+    '        _mpytools_remove(path.rstrip("/") + "/" + name)',
+    '    os.rmdir(path)',
+    `_mpytools_root = ${JSON.stringify(rootPath)}`,
+    'for _mpytools_name in os.listdir(_mpytools_root):',
+    '    if _mpytools_name.lower() == "system":',
+    '        continue',
+    '    _mpytools_remove(_mpytools_root.rstrip("/") + "/" + _mpytools_name)'
+  ].join('\n');
+  // Listing and deleting happen inside one serialized device command. Compile
+  // & Run can only start after the whole cleanup has finished.
+  await runMpremote(['exec', script], 5 * 60_000);
 }
 
 
@@ -572,8 +531,8 @@ function requireDeviceSession(): DeviceSession {
   return activeDeviceSession;
 }
 
-async function runMpremote(args: readonly string[]): Promise<string> {
-  const result = await requireDeviceSession().run(args, { timeoutMs: 60_000 });
+async function runMpremote(args: readonly string[], timeoutMs = 60_000): Promise<string> {
+  const result = await requireDeviceSession().run(args, { timeoutMs });
   return result.stdout;
 }
 
