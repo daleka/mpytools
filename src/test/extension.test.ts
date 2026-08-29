@@ -11,6 +11,7 @@ import {
 	findExecutableOnPath,
 	findMpyCrossArchiveVersion,
 	findMpyCrossPackageRootsNearLauncher,
+	listCompatibleNativeMpyCrossCandidates,
 	listNativeMpyCrossCandidates,
 	parseMpyCrossBytecodeVersion
 } from '../mpyCross';
@@ -96,6 +97,10 @@ suite('Extension Test Suite', () => {
 
 			assert.deepStrictEqual(findMpyCrossPackageRootsNearLauncher(launcher), [packageRoot]);
 			assert.deepStrictEqual(listNativeMpyCrossCandidates(packageRoot), [currentBinary, archivedBinary]);
+			assert.deepStrictEqual(
+				listCompatibleNativeMpyCrossCandidates(packageRoot, 6.3),
+				[currentBinary, archivedBinary]
+			);
 			assert.strictEqual(findMpyCrossArchiveVersion(packageRoot, 6.3), 'v1.23.0');
 			assert.strictEqual(findMpyCrossArchiveVersion(packageRoot, 6.2), undefined);
 		} finally {

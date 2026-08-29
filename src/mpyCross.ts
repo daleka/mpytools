@@ -249,6 +249,35 @@ export function findMpyCrossArchiveVersion(
   return undefined;
 }
 
+/**
+ * Prefer the newest compiler when it emits the requested bytecode ABI. An
+ * archived compiler is only a compatibility fallback. Selecting the oldest
+ * release for a long-lived ABI (for example v6.3) rejects syntax added by newer
+ * MicroPython releases even though their emitted bytecode remains compatible.
+ */
+export function listCompatibleNativeMpyCrossCandidates(
+  packageRoot: string,
+  bytecodeVersion?: number | string
+): string[] {
+  const candidates: string[] = [];
+  const current = findNativeInDirectory(packageRoot);
+  if (current) {
+    candidates.push(current);
+  }
+
+  const requested = normalizeBytecodeVersion(bytecodeVersion);
+  if (requested) {
+    const archiveVersion = findMpyCrossArchiveVersion(packageRoot, requested);
+    if (archiveVersion) {
+      const archived = findNativeInDirectory(path.join(packageRoot, 'archive', archiveVersion));
+      if (archived && archived !== current) {
+        candidates.push(archived);
+      }
+    }
+  }
+  return candidates;
+}
+
 export function parseMpyCrossBytecodeVersion(versionText: string): string | undefined {
   return versionText.match(/\bmpy\s+v(\d+(?:\.\d+)*)\b/i)?.[1];
 }
@@ -287,31 +316,21 @@ async function selectNativeTarget(
   packageRoot: string,
   requestedBytecode: string | undefined
 ): Promise<MpyCrossTarget | undefined> {
-  let executable: string | undefined;
-  if (requestedBytecode === undefined) {
-    executable = findNativeInDirectory(packageRoot);
-  } else {
-    const archiveVersion = findMpyCrossArchiveVersion(packageRoot, requestedBytecode);
-    if (archiveVersion) {
-      executable = findNativeInDirectory(path.join(packageRoot, 'archive', archiveVersion));
+  for (const executable of listCompatibleNativeMpyCrossCandidates(packageRoot, requestedBytecode)) {
+    const probe = await probeNative(executable);
+    if (!probe || (requestedBytecode !== undefined && probe.bytecodeVersion !== requestedBytecode)) {
+      continue;
     }
+    return {
+      executable: probe.executable,
+      prefixArgs: [],
+      mode: 'native',
+      versionText: probe.versionText,
+      bytecodeVersion: probe.bytecodeVersion,
+      packageRoot
+    };
   }
-  if (!executable) {
-    return undefined;
-  }
-
-  const probe = await probeNative(executable);
-  if (!probe || (requestedBytecode !== undefined && probe.bytecodeVersion !== requestedBytecode)) {
-    return undefined;
-  }
-  return {
-    executable: probe.executable,
-    prefixArgs: [],
-    mode: 'native',
-    versionText: probe.versionText,
-    bytecodeVersion: probe.bytecodeVersion,
-    packageRoot
-  };
+  return undefined;
 }
 
 interface PythonCommand {

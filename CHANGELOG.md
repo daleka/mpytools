@@ -6,6 +6,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.2]
+
+- Prefer the current managed `mpy-cross` when it emits the device's requested
+  bytecode ABI, using archived compilers only as compatibility fallbacks. This
+  preserves newer MicroPython syntax such as adjacent f-string concatenation.
+
 ## [0.4.1]
 
 - Move compilation output and generated asset wrappers completely out of the
