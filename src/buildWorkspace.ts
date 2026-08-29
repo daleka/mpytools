@@ -72,6 +72,11 @@ export function isPathInside(parentPath: string, candidatePath: string): boolean
   return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
+export function isRootStartupPythonFile(sourceRoot: string, filePath: string): boolean {
+  const relativePath = path.relative(sourceRoot, filePath);
+  return relativePath === 'main.py' || relativePath === 'boot.py';
+}
+
 /**
  * Uses VS Code's workspace-scoped extension storage. The global fallback is
  * namespaced by a stable workspace hash so two projects can never share output.

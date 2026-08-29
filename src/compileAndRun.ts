@@ -11,9 +11,16 @@ import {
   collectSourceInventory,
   DEFAULT_WRAPPABLE_ASSET_EXTENSIONS,
   ensureParentDirectories,
+  isRootStartupPythonFile,
   normalizeAssetExtensions,
   resolveBuildStoragePaths
 } from './buildWorkspace';
+import {
+  conflictingProjectEntryPoint,
+  ProjectEntryPoint,
+  resolveProjectEntryPoint
+} from './projectSelection';
+import { resolveWorkspaceProjectFolder } from './workspaceProject';
  
 
 /**
@@ -82,9 +89,13 @@ export function registerCompileAndRunCommand(
     }
 
     // 2.2 Перевірка відкритого Workspace
-    let workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-      vscode.window.showErrorMessage('No workspace folder opened.');
+    const workspaceFolder = await resolveWorkspaceProjectFolder('Select the project to compile and upload');
+    if (!workspaceFolder) {
+      if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+        vscode.window.showErrorMessage('No workspace folder opened.');
+      } else {
+        vscode.window.showWarningMessage('Compilation canceled: no project selected.');
+      }
       return;
     }
 
@@ -145,10 +156,21 @@ export function registerCompileAndRunCommand(
     setSelectedMethod(currentMethod);
 
     // 2.4 Підготовчі змінні
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    const workspaceRoot = workspaceFolder.uri.fsPath;
     const srcPath = path.join(workspaceRoot, 'src');
     if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isDirectory()) {
       vscode.window.showErrorMessage(`Source folder does not exist: ${srcPath}`);
+      return;
+    }
+    let entryPoint: ProjectEntryPoint;
+    const mainPyPath = path.join(srcPath, 'main.py');
+    const mainMpyPath = path.join(srcPath, 'main.mpy');
+    const hasMainPy = fs.existsSync(mainPyPath) && fs.statSync(mainPyPath).isFile();
+    const hasMainMpy = fs.existsSync(mainMpyPath) && fs.statSync(mainMpyPath).isFile();
+    try {
+      entryPoint = resolveProjectEntryPoint(hasMainPy, hasMainMpy);
+    } catch (error: any) {
+      vscode.window.showErrorMessage(error.message ?? String(error));
       return;
     }
     const buildStorage = resolveBuildStoragePaths(
@@ -159,7 +181,7 @@ export function registerCompileAndRunCommand(
     const mpyPath = buildStorage.build;
     const wrappersPath = buildStorage.wrappers;
     const configuredAssetExtensions = vscode.workspace
-      .getConfiguration('mpytools', workspaceFolders[0].uri)
+      .getConfiguration('mpytools', workspaceFolder.uri)
       .get<string[]>('wrappableAssetExtensions', [...DEFAULT_WRAPPABLE_ASSET_EXTENSIONS]);
     const buildConfiguration = {
       extensionVersion: String(context.extension.packageJSON.version ?? 'unknown'),
@@ -226,7 +248,15 @@ export function registerCompileAndRunCommand(
         ]);
 
         const inventory = await collectSourceInventory(srcPath, configuredAssetExtensions);
-        const pythonFiles = inventory.pythonFiles;
+        // MicroPython's standard boot sequence opens boot.py and main.py by
+        // filename. Keep these two root entry scripts as source even when all
+        // importable project modules are compiled to .mpy.
+        const startupPythonFiles = inventory.pythonFiles.filter((filePath) =>
+          isRootStartupPythonFile(srcPath, filePath)
+        );
+        const pythonFiles = inventory.pythonFiles.filter((filePath) =>
+          !isRootStartupPythonFile(srcPath, filePath)
+        );
         const filesToWrap = shouldWrapNonPy ? inventory.wrappableAssetFiles : [];
         const filesToCopy = shouldWrapNonPy
           ? inventory.rawAssetFiles
@@ -243,6 +273,7 @@ export function registerCompileAndRunCommand(
             const relative = path.relative(srcPath, filePath).replace(/\.py$/u, '.mpy');
             return path.join(mpyPath, relative);
           }),
+          ...startupPythonFiles.map((filePath) => getRawOutputPath(filePath, srcPath, mpyPath)),
           ...nonPythonFiles.map((filePath) => filesToWrapSet.has(filePath)
             ? getAssetOutputPath(filePath, srcPath, mpyPath)
             : getRawOutputPath(filePath, srcPath, mpyPath))
@@ -256,6 +287,17 @@ export function registerCompileAndRunCommand(
           ...expectedBuildFiles,
           ...expectedWrapperFiles
         ]);
+        for (const filePath of startupPythonFiles) {
+          const shortName = path.relative(workspaceRoot, filePath);
+          const outPath = getRawOutputPath(filePath, srcPath, mpyPath);
+          if (needsFileCopy(filePath, outPath)) {
+            await copyWithMkDir(filePath, outPath);
+            copiedPyCount++;
+            logBuildLine(`   🔹 Preserved startup source: ${shortName}`);
+          } else {
+            logBuildLine(`   🔹 Skipped (unchanged startup source): ${shortName}`);
+          }
+        }
         const pythonFilesToCompile: string[] = [];
 
         for (const filePath of pythonFiles) {
@@ -336,11 +378,15 @@ export function registerCompileAndRunCommand(
         }
         if (shouldWrapNonPy) {
           logBuildLine(
-            `   ✅ Compiled ${compiledCount} .py files; Wrapped+compiled ${wrappedNonPyCount} assets; `
+            `   ✅ Compiled ${compiledCount} .py files; Preserved ${startupPythonFiles.length} startup scripts; `
+            + `Wrapped+compiled ${wrappedNonPyCount} assets; `
             + `Copied ${copiedNonPyCount} other assets as-is.`
           );
         } else {
-          logBuildLine(`   ✅ Compiled ${compiledCount} .py files; Copied ${copiedNonPyCount} non-py files as-is.`);
+          logBuildLine(
+            `   ✅ Compiled ${compiledCount} .py files; Preserved ${startupPythonFiles.length} startup scripts; `
+            + `Copied ${copiedNonPyCount} non-py files as-is.`
+          );
         }
         if (buildErrors.length > 0) {
           throw new Error(`Compilation failed for ${buildErrors.length} file(s):\n${buildErrors.join('\n')}`);
@@ -436,6 +482,17 @@ export function registerCompileAndRunCommand(
         return;
       }
 
+      // A previous project may have used the other entry-point format. Remove
+      // only that conflicting root file so an old main cannot shadow the
+      // project that was just uploaded; all other device data is preserved.
+      const conflictingEntryPoint = conflictingProjectEntryPoint(entryPoint);
+      try {
+        await removeRemoteFileIfPresent(deviceSession, conflictingEntryPoint);
+        logBuildLine(`   🧹 Removed stale conflicting entry point if present: /${conflictingEntryPoint}`);
+      } catch (error: any) {
+        throw new Error(`Could not remove stale /${conflictingEntryPoint}: ${error.message ?? error}`);
+      }
+
       if (preparedVersion) {
         try {
           const snapshot = saveFirmwareSnapshot(workspaceRoot, preparedVersion);
@@ -457,17 +514,19 @@ export function registerCompileAndRunCommand(
       // 2.7 (Опційно) Оцінимо розмір скопійованої теки
       const folderSizeKB = await getFolderSizeKB(mpyPath);
       logBuildLine(`🔹 Total size of uploaded folder: ${folderSizeKB.toFixed(2)} KB`);
-      logBuildLine("🔹 Launching main...");
+      logBuildLine(
+        entryPoint === 'python'
+          ? '🔹 Soft-resetting device; MicroPython will execute /main.py...'
+          : '🔹 Soft-resetting device, then importing /main.mpy...'
+      );
 
-      // 2.8 Запускаємо main
-      await deviceSession.openRepl(
+      // 2.8 Start through MicroPython's normal boot path. A source main.py is
+      // executed automatically after Ctrl-D. Precompiled-only projects need a
+      // plain import fallback, without requiring any project-specific entry function.
+      await deviceSession.openReplAndRestart(
         'MPY Debugging',
-        [
-          'print("[MPyTools] REPL ready")',
-          'import main',
-          'print("[MPyTools] main.run()")',
-          'main.run()'
-        ]
+        entryPoint === 'bytecode' ? ['import main'] : [],
+        workspaceRoot
       );
       });
     } catch (error: any) {
@@ -482,6 +541,20 @@ export function registerCompileAndRunCommand(
 
   context.subscriptions.push(disposableCompileAndRun);
   return compileStatusBarItem;
+}
+
+async function removeRemoteFileIfPresent(
+  deviceSession: DeviceSession,
+  remoteFileName: 'main.py' | 'main.mpy'
+): Promise<void> {
+  const script = [
+    'import os',
+    'try:',
+    `    os.remove(${JSON.stringify(remoteFileName)})`,
+    'except OSError:',
+    '    pass'
+  ].join('\n');
+  await deviceSession.run(['exec', script]);
 }
 
 async function showBuildOutputAtEnd(outputChannel: vscode.OutputChannel): Promise<void> {

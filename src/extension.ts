@@ -103,7 +103,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Кнопка REPL
   let perlStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -2);
   perlStatusBarItem.text = '$(terminal) REPL';
-  perlStatusBarItem.tooltip = 'Open REPL terminal (without running main.run())';
+  perlStatusBarItem.tooltip = 'Open an interactive MicroPython REPL terminal';
   perlStatusBarItem.command = 'mpytools.repl';
   perlStatusBarItem.hide();
   context.subscriptions.push(perlStatusBarItem);

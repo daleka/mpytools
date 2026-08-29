@@ -6,6 +6,7 @@ import { mpyOutputChannel } from './extension';
 import { micropythonSysName } from './extension';
 import { DeviceSession } from './deviceSession';
 import { parseFileSystemEntry } from './deviceFiles';
+import { resolveWorkspaceProjectFolder } from './workspaceProject';
 
 let activeDeviceSession: DeviceSession | undefined;
 let deviceFileStorageRoot: string | undefined;
@@ -192,12 +193,12 @@ export function registerFileManager(context: vscode.ExtensionContext, deviceSess
   context.subscriptions.push(
     vscode.commands.registerCommand('mpytoolsFileExplorer.sendDeviceFileToLocal', async (item: FileItem) => {
       if (!item.fullPath) { return; }
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders || workspaceFolders.length === 0) {
+      const workspaceFolder = await resolveWorkspaceProjectFolder('Select the project for the downloaded device file');
+      if (!workspaceFolder) {
         vscode.window.showErrorMessage("No workspace folder is open.");
         return;
       }
-      const workspaceRoot = workspaceFolders[0].uri.fsPath;
+      const workspaceRoot = workspaceFolder.uri.fsPath;
       const relativeDevicePath = item.fullPath.replace(/^\//, '');
       // Файли пристрою зберігаються в окремій папці "device" всередині робочої області
       const deviceRoot = path.join(workspaceRoot, 'device');

@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createZipArchive } from './archive';
+import { resolveWorkspaceProjectFolder } from './workspaceProject';
  
 /**
  * Реєструє команду "mpytools.saveProject", а також додає кнопку в статус-бар
@@ -35,13 +36,13 @@ export function registerSaveProjectCommand(
   let disposableSaveProject = vscode.commands.registerCommand(
     'mpytools.saveProject',
     async (): Promise<void> => {
-      let workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders || workspaceFolders.length === 0) {
+      const workspaceFolder = await resolveWorkspaceProjectFolder('Select the project to archive');
+      if (!workspaceFolder) {
         vscode.window.showErrorMessage('Не знайдено відкритий Workspace (No workspace).');
         return;
       }
 
-      const workspaceRoot = workspaceFolders[0].uri.fsPath;
+      const workspaceRoot = workspaceFolder.uri.fsPath;
       const srcFolderPath = path.join(workspaceRoot, 'src');
       if (!fs.existsSync(srcFolderPath)) {
         vscode.window.showErrorMessage('Папка src не існує у Workspace (src folder does not exist).');

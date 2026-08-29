@@ -13,11 +13,17 @@ import {
   stablePortTarget
 } from '../ports';
 import { runProcess } from '../processRunner';
-import { runReplCommands } from '../replControl';
+import { restartMicroPythonInRepl, runReplCommands } from '../replControl';
+import {
+  conflictingProjectEntryPoint,
+  resolveProjectCandidate,
+  resolveProjectEntryPoint
+} from '../projectSelection';
 import {
   assertUniqueOutputPaths,
   collectSourceInventory,
   isPathInside,
+  isRootStartupPythonFile,
   resolveBuildStoragePaths
 } from '../buildWorkspace';
 
@@ -125,7 +131,7 @@ suite('MPyTools core', () => {
           events.push(`send:${JSON.stringify(text)}:${String(shouldExecute)}`);
         }
       },
-      ['import main', 'main.run()'],
+      ['print("ready")', 'help()'],
       async (milliseconds) => {
         events.push(`wait:${milliseconds}`);
       }
@@ -134,10 +140,94 @@ suite('MPyTools core', () => {
       'wait:1500',
       'send:"\\u0003":false',
       'wait:300',
-      'send:"import main":true',
+      'send:"print(\\"ready\\")":true',
       'wait:200',
-      'send:"main.run()":true'
+      'send:"help()":true'
     ]);
+  });
+
+  test('soft-resets through the friendly REPL so MicroPython runs main.py itself', async () => {
+    const events: string[] = [];
+    await restartMicroPythonInRepl(
+      {
+        sendText(text, shouldExecute) {
+          events.push(`send:${JSON.stringify(text)}:${String(shouldExecute)}`);
+        }
+      },
+      [],
+      async (milliseconds) => {
+        events.push(`wait:${milliseconds}`);
+      }
+    );
+    assert.deepStrictEqual(events, [
+      'wait:1500',
+      'send:"\\u0003":false',
+      'wait:300',
+      'send:"\\u0004":false'
+    ]);
+  });
+
+  test('imports a precompiled-only main.mpy after the standard soft reset', async () => {
+    const events: string[] = [];
+    await restartMicroPythonInRepl(
+      {
+        sendText(text, shouldExecute) {
+          events.push(`send:${JSON.stringify(text)}:${String(shouldExecute)}`);
+        }
+      },
+      ['import main'],
+      async (milliseconds) => {
+        events.push(`wait:${milliseconds}`);
+      }
+    );
+    assert.deepStrictEqual(events, [
+      'wait:1500',
+      'send:"\\u0003":false',
+      'wait:300',
+      'send:"\\u0004":false',
+      'wait:1500',
+      'send:"import main":true',
+      'wait:200'
+    ]);
+  });
+
+  test('resolves the project containing the active file before workspace order', () => {
+    const first = { value: 'first', rootPath: path.join(os.tmpdir(), 'first'), hasSourceDirectory: true };
+    const active = { value: 'active', rootPath: path.join(os.tmpdir(), 'active'), hasSourceDirectory: true };
+    const resolution = resolveProjectCandidate(
+      [first, active],
+      path.join(active.rootPath, 'src', 'main.py')
+    );
+    assert.strictEqual(resolution.selected?.value, 'active');
+    assert.deepStrictEqual(resolution.choices, []);
+  });
+
+  test('requires an explicit choice when multiple MPyTools projects are ambiguous', () => {
+    const candidates = [
+      { value: 'first', rootPath: path.join(os.tmpdir(), 'first'), hasSourceDirectory: true },
+      { value: 'second', rootPath: path.join(os.tmpdir(), 'second'), hasSourceDirectory: true },
+      { value: 'not-a-project', rootPath: path.join(os.tmpdir(), 'third'), hasSourceDirectory: false }
+    ];
+    const resolution = resolveProjectCandidate(candidates);
+    assert.strictEqual(resolution.selected, undefined);
+    assert.deepStrictEqual(resolution.choices.map((candidate) => candidate.value), ['first', 'second']);
+  });
+
+  test('accepts exactly one generic main.py or main.mpy entry point', () => {
+    assert.strictEqual(resolveProjectEntryPoint(true, false), 'python');
+    assert.strictEqual(resolveProjectEntryPoint(false, true), 'bytecode');
+    assert.strictEqual(conflictingProjectEntryPoint('python'), 'main.mpy');
+    assert.strictEqual(conflictingProjectEntryPoint('bytecode'), 'main.py');
+    assert.throws(() => resolveProjectEntryPoint(true, true), /exactly one/u);
+    assert.throws(() => resolveProjectEntryPoint(false, false), /not found/u);
+  });
+
+  test('preserves root boot.py and main.py for the standard MicroPython boot sequence', () => {
+    const sourceRoot = path.join(os.tmpdir(), 'startup-source');
+    assert.strictEqual(isRootStartupPythonFile(sourceRoot, path.join(sourceRoot, 'boot.py')), true);
+    assert.strictEqual(isRootStartupPythonFile(sourceRoot, path.join(sourceRoot, 'main.py')), true);
+    assert.strictEqual(isRootStartupPythonFile(sourceRoot, path.join(sourceRoot, 'lib', 'main.py')), false);
+    assert.strictEqual(isRootStartupPythonFile(sourceRoot, path.join(sourceRoot, 'worker.py')), false);
   });
 
   test('keeps build artifacts outside the workspace and isolates project caches', () => {

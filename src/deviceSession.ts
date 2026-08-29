@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { DeviceCommandError, MpremoteService } from './mpremoteService';
 import { normalizePortTarget, SerialPortDescriptor, stablePortTarget } from './ports';
-import { runReplCommands } from './replControl';
+import { restartMicroPythonInRepl, runReplCommands } from './replControl';
 
 const SELECTED_PORT_KEY = 'mpytools.selectedPort.v2';
 
@@ -83,10 +83,14 @@ export class DeviceSession implements vscode.Disposable {
     });
   }
 
-  async openRepl(name = 'MPY REPL', startupCommands: readonly string[] = []): Promise<vscode.Terminal> {
+  async openRepl(
+    name = 'MPY REPL',
+    startupCommands: readonly string[] = [],
+    cwd?: string
+  ): Promise<vscode.Terminal> {
     const args = ['connect', this.connectTarget(), 'repl'];
     return this.exclusive(async () => {
-      const terminal = await this.openCommandTerminal(name, args);
+      const terminal = await this.openCommandTerminal(name, args, cwd);
       if (startupCommands.length > 0) {
         // Restore the proven legacy launch flow: wait for mpremote's console,
         // interrupt any running program, then submit ordinary REPL commands.
@@ -97,11 +101,25 @@ export class DeviceSession implements vscode.Disposable {
     });
   }
 
+  async openReplAndRestart(
+    name = 'MPY REPL',
+    commandsAfterReset: readonly string[] = [],
+    cwd?: string
+  ): Promise<vscode.Terminal> {
+    const args = ['connect', this.connectTarget(), 'repl'];
+    return this.exclusive(async () => {
+      const terminal = await this.openCommandTerminal(name, args, cwd);
+      await waitForTerminalProcess(terminal);
+      await restartMicroPythonInRepl(terminal, commandsAfterReset);
+      return terminal;
+    });
+  }
+
   async openRunFile(filePath: string, name = 'MPY Run'): Promise<vscode.Terminal> {
     return this.exclusive(() => this.openCommandTerminal(name, ['connect', this.connectTarget(), 'run', filePath]));
   }
 
-  private async openCommandTerminal(name: string, args: string[]): Promise<vscode.Terminal> {
+  private async openCommandTerminal(name: string, args: string[], cwd?: string): Promise<vscode.Terminal> {
     await this.closeInteractiveTerminalInternal();
     const invocation = await this.mpremote.terminalInvocation(args);
     this.terminalClosed = new Promise<void>((resolve) => {
@@ -111,6 +129,7 @@ export class DeviceSession implements vscode.Disposable {
       name,
       shellPath: invocation.shellPath,
       shellArgs: invocation.shellArgs,
+      cwd,
       isTransient: true
     });
     this.interactiveTerminal.show();

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { CommandTarget, runProcess } from './processRunner';
 import { ToolchainManager } from './toolchain';
+import { resolveWorkspaceProjectFolder } from './workspaceProject';
 
 const STDLIB_STUBS_VERSION = '1.28.0.post6';
 const BOARD_STUB_PACKAGES = {
@@ -49,7 +50,7 @@ async function installWorkspaceStubs(
   outputChannel: vscode.OutputChannel,
   toolchain: ToolchainManager
 ): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const workspaceFolder = await resolveWorkspaceProjectFolder('Select the project where stubs should be installed');
   if (!workspaceFolder) {
     vscode.window.showErrorMessage('Open a workspace before installing MicroPython stubs.');
     return;

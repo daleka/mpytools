@@ -6,6 +6,21 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.6]
+
+- Resolve every project-scoped command from the active editor's workspace
+  instead of blindly using the first folder. Multi-root workspaces now ask for
+  an explicit project whenever the active editor does not disambiguate it.
+- Start source projects through MicroPython's standard friendly-REPL soft reset,
+  allowing the runtime to execute `boot.py` and `main.py` without requiring a
+  project-specific `main.run()` function.
+- Preserve root `boot.py` and `main.py` as source entry scripts while compiling
+  all importable modules to `.mpy`. Precompiled-only `main.mpy` projects use a
+  plain `import main` fallback after reset.
+- Remove only the conflicting stale `/main.py` or `/main.mpy` entry point after
+  upload, preventing a previous project format from shadowing the new one while
+  leaving all unrelated device data untouched.
+
 ## [0.4.5]
 
 - Batch MPyTools Output writes into one block every 150 ms, with a bounded
