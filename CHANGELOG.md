@@ -6,6 +6,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.5]
+
+- Batch MPyTools Output writes into one block every 150 ms, with a bounded
+  64 KiB buffer and guaranteed flush on show, hide, and dispose. This covers
+  parallel `mpy-cross` diagnostics as well as build progress and sharply
+  reduces Output model updates while preserving every log line.
+
 ## [0.4.4]
 
 - Restore the proven REPL startup sequence used by earlier MPyTools releases:

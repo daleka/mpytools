@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { createZipArchive } from '../archive';
+import { BufferedTextWriter } from '../bufferedOutput';
 import { decodeMpyAbi } from '../micropythonInfo';
 import { parseFileSystemEntry } from '../deviceFiles';
 import {
@@ -71,6 +72,49 @@ suite('MPyTools core', () => {
       source: 'configured'
     }, [dangerousArgument]);
     assert.strictEqual(result.stdout, dangerousArgument);
+  });
+
+  test('batches log lines into one Output update and never loses a pending block', () => {
+    const blocks: string[] = [];
+    const scheduled: Array<() => void> = [];
+    const cancelled: unknown[] = [];
+    const writer = new BufferedTextWriter(
+      (text) => blocks.push(text),
+      150,
+      64 * 1024,
+      (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      (handle) => cancelled.push(handle)
+    );
+
+    writer.appendLine('first');
+    writer.appendLine('second');
+    assert.strictEqual(scheduled.length, 1);
+    assert.deepStrictEqual(blocks, []);
+
+    scheduled[0]();
+    assert.deepStrictEqual(blocks, ['first\nsecond\n']);
+
+    writer.append('tail');
+    writer.dispose();
+    assert.deepStrictEqual(blocks, ['first\nsecond\n', 'tail']);
+    assert.ok(cancelled.length >= 1);
+  });
+
+  test('flushes a log batch immediately when its bounded buffer is full', () => {
+    const blocks: string[] = [];
+    const writer = new BufferedTextWriter(
+      (text) => blocks.push(text),
+      150,
+      8,
+      () => 1,
+      () => undefined
+    );
+    writer.append('1234');
+    writer.append('5678');
+    assert.deepStrictEqual(blocks, ['12345678']);
   });
 
   test('interrupts a running board before submitting startup commands to its REPL', async () => {

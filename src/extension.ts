@@ -9,13 +9,17 @@ import { registerCompileAndRunCommand } from './compileAndRun';
 import { registerFileManager } from './fileManager';
 import { formatMpyCrossInvocation, runMpyCross } from './mpyCross';
 import { ToolchainManager } from './toolchain';
+import { BufferedOutputChannel } from './bufferedOutputChannel';
 import { MpremoteService } from './mpremoteService';
 import { DeviceSession } from './deviceSession';
 import { describePort, SerialPortDescriptor } from './ports';
 import { decodeMpyAbi } from './micropythonInfo';
 
 // Вікно логу
-export const mpyOutputChannel = vscode.window.createOutputChannel("MPyTools Log");
+export const mpyOutputChannel = new BufferedOutputChannel(
+  vscode.window.createOutputChannel("MPyTools Log"),
+  150
+);
 
 // Інформація про поточну прошивку/архітектуру
 export let micropythonVersion: string | undefined = undefined;
