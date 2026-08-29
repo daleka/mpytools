@@ -169,9 +169,9 @@
             "Keep generated files in protected VS Code extension storage. Use MPY: Open Build Folder to inspect them.",
             "Use a visible <project>/mpy folder owned and pruned by MPyTools."
           ],
-          "default": "extensionStorage",
+          "default": "workspace",
           "scope": "resource",
-          "description": "Where MPyTools stores the generated folder uploaded to the device. Workspace mode restores the visible mpy/ workflow; extension storage reduces VS Code file watching."
+          "description": "Where MPyTools stores the generated folder uploaded to the device. The default visible workspace mpy/ folder restores the classic workflow; extension storage is an optional mode that reduces VS Code file watching."
         }
       }
     },

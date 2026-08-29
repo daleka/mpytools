@@ -183,7 +183,7 @@ export function registerCompileAndRunCommand(
       context.globalStorageUri.fsPath,
       vscode.workspace
         .getConfiguration('mpytools', workspaceFolder.uri)
-        .get<BuildOutputLocation>('buildOutputLocation', 'extensionStorage')
+        .get<BuildOutputLocation>('buildOutputLocation', 'workspace')
     );
     const mpyPath = buildStorage.build;
     const wrappersPath = buildStorage.wrappers;

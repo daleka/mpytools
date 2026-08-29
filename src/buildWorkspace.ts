@@ -102,14 +102,15 @@ export function estimateUploadTimeoutMs(totalBytes: number, fileCount: number): 
 }
 
 /**
- * Uses VS Code's workspace-scoped extension storage. The global fallback is
- * namespaced by a stable workspace hash so two projects can never share output.
+ * Keeps metadata and generated wrappers in VS Code extension storage. Build
+ * output defaults to the visible project mpy/ folder; the protected mode puts
+ * it beside that metadata. Stable project hashes prevent multi-root collisions.
  */
 export function resolveBuildStoragePaths(
   workspaceRoot: string,
   workspaceStoragePath: string | undefined,
   globalStoragePath: string,
-  location: BuildOutputLocation = 'extensionStorage'
+  location: BuildOutputLocation = 'workspace'
 ): BuildStoragePaths {
   const workspaceHash = createHash('sha256')
     .update(normalizedPathKey(workspaceRoot))

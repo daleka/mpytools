@@ -11,9 +11,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - Add a supported visible build-output mode that restores the project-local
   `mpy/` folder. MPyTools owns and prunes this folder, so it can be inspected,
   edited, or deleted manually while preserving incremental compilation.
-- Keep protected extension storage as the default for users who want to avoid
-  workspace file watching, and add commands to select, open, or safely clear
-  either build location.
+- Restore the visible workspace `mpy/` folder as the zero-configuration
+  default. Protected extension storage remains an optional mode, and commands
+  can select, open, or safely clear either build location.
 - Reset an unambiguous project's build cache immediately after port selection,
   and isolate build metadata per folder in multi-root workspaces.
 - Document differential uploads in the build log: `mpremote` compares hashes

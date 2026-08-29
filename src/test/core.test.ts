@@ -253,20 +253,33 @@ suite('MPyTools core', () => {
     assert.strictEqual(estimateUploadTimeoutMs(Number.POSITIVE_INFINITY, -1), 120_000);
   });
 
-  test('keeps build artifacts outside the workspace and isolates project caches', () => {
+  test('defaults to visible mpy output and isolates protected project caches', () => {
     const workspaceA = path.join(os.tmpdir(), 'project-a');
     const workspaceB = path.join(os.tmpdir(), 'project-b');
     const globalStorage = path.join(os.tmpdir(), 'mpytools-global-storage');
-    const first = resolveBuildStoragePaths(workspaceA, undefined, globalStorage);
-    const second = resolveBuildStoragePaths(workspaceB, undefined, globalStorage);
+    const defaultVisible = resolveBuildStoragePaths(workspaceA, undefined, globalStorage);
+    assert.strictEqual(defaultVisible.build, path.join(workspaceA, 'mpy'));
+
+    const first = resolveBuildStoragePaths(workspaceA, undefined, globalStorage, 'extensionStorage');
+    const second = resolveBuildStoragePaths(workspaceB, undefined, globalStorage, 'extensionStorage');
 
     assert.strictEqual(isPathInside(workspaceA, first.root), false);
     assert.notStrictEqual(first.root, second.root);
     assert.strictEqual(first.build, path.join(first.root, 'build'));
     assert.strictEqual(first.wrappers, path.join(first.root, 'wrappers'));
     const sharedWorkspaceStorage = path.join(os.tmpdir(), 'vscode-workspace-storage');
-    const multiRootFirst = resolveBuildStoragePaths(workspaceA, sharedWorkspaceStorage, globalStorage);
-    const multiRootSecond = resolveBuildStoragePaths(workspaceB, sharedWorkspaceStorage, globalStorage);
+    const multiRootFirst = resolveBuildStoragePaths(
+      workspaceA,
+      sharedWorkspaceStorage,
+      globalStorage,
+      'extensionStorage'
+    );
+    const multiRootSecond = resolveBuildStoragePaths(
+      workspaceB,
+      sharedWorkspaceStorage,
+      globalStorage,
+      'extensionStorage'
+    );
     assert.notStrictEqual(multiRootFirst.root, multiRootSecond.root);
 
     const visible = resolveBuildStoragePaths(

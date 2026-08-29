@@ -53,7 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const buildStorageForFolder = (folder: vscode.WorkspaceFolder): BuildStoragePaths => {
     const location = vscode.workspace
       .getConfiguration('mpytools', folder.uri)
-      .get<BuildOutputLocation>('buildOutputLocation', 'extensionStorage');
+      .get<BuildOutputLocation>('buildOutputLocation', 'workspace');
     return resolveBuildStoragePaths(
       folder.uri.fsPath,
       context.storageUri?.fsPath,
