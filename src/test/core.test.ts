@@ -21,6 +21,7 @@ import {
 } from '../projectSelection';
 import {
   assertUniqueOutputPaths,
+  clearBuildStorage,
   collectSourceInventory,
   estimateUploadTimeoutMs,
   isPathInside,
@@ -263,11 +264,47 @@ suite('MPyTools core', () => {
     assert.notStrictEqual(first.root, second.root);
     assert.strictEqual(first.build, path.join(first.root, 'build'));
     assert.strictEqual(first.wrappers, path.join(first.root, 'wrappers'));
+    const sharedWorkspaceStorage = path.join(os.tmpdir(), 'vscode-workspace-storage');
+    const multiRootFirst = resolveBuildStoragePaths(workspaceA, sharedWorkspaceStorage, globalStorage);
+    const multiRootSecond = resolveBuildStoragePaths(workspaceB, sharedWorkspaceStorage, globalStorage);
+    assert.notStrictEqual(multiRootFirst.root, multiRootSecond.root);
+
+    const visible = resolveBuildStoragePaths(
+      workspaceA,
+      sharedWorkspaceStorage,
+      globalStorage,
+      'workspace'
+    );
+    assert.strictEqual(visible.build, path.join(workspaceA, 'mpy'));
+    assert.strictEqual(isPathInside(workspaceA, visible.root), false);
     assert.throws(() => resolveBuildStoragePaths(
       workspaceA,
       path.join(workspaceA, '.extension-storage'),
       globalStorage
     ), /unsafe build storage path/);
+  });
+
+  test('clears only resolved MPyTools cache paths in visible workspace mode', async () => {
+    const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mpytools-visible-build-'));
+    try {
+      const workspaceRoot = path.join(temporaryRoot, 'project');
+      const globalStorage = path.join(temporaryRoot, 'global-storage');
+      const unrelated = path.join(workspaceRoot, 'keep.txt');
+      const storage = resolveBuildStoragePaths(workspaceRoot, undefined, globalStorage, 'workspace');
+      fs.mkdirSync(storage.root, { recursive: true });
+      fs.mkdirSync(storage.build, { recursive: true });
+      fs.writeFileSync(path.join(storage.root, 'build-config.json'), '{}');
+      fs.writeFileSync(path.join(storage.build, 'main.mpy'), 'compiled');
+      fs.writeFileSync(unrelated, 'keep');
+
+      await clearBuildStorage(storage);
+
+      assert.strictEqual(fs.existsSync(storage.root), false);
+      assert.strictEqual(fs.existsSync(storage.build), false);
+      assert.strictEqual(fs.readFileSync(unrelated, 'utf-8'), 'keep');
+    } finally {
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   test('ignores generated Python caches and classifies only configured assets for wrapping', async () => {

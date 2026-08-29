@@ -4,6 +4,8 @@ import * as path from 'path';
 
 export const BUILD_CACHE_SCHEMA = 'build-cache-v2';
 
+export type BuildOutputLocation = 'extensionStorage' | 'workspace';
+
 const MIN_UPLOAD_TIMEOUT_MS = 120_000;
 const MAX_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 const UPLOAD_CONNECT_ALLOWANCE_MS = 30_000;
@@ -59,6 +61,8 @@ export interface BuildStoragePaths {
   root: string;
   build: string;
   wrappers: string;
+  location: BuildOutputLocation;
+  workspaceRoot: string;
 }
 
 export interface SourceInventory {
@@ -104,14 +108,18 @@ export function estimateUploadTimeoutMs(totalBytes: number, fileCount: number): 
 export function resolveBuildStoragePaths(
   workspaceRoot: string,
   workspaceStoragePath: string | undefined,
-  globalStoragePath: string
+  globalStoragePath: string,
+  location: BuildOutputLocation = 'extensionStorage'
 ): BuildStoragePaths {
   const workspaceHash = createHash('sha256')
     .update(normalizedPathKey(workspaceRoot))
     .digest('hex')
     .slice(0, 20);
+  // context.storageUri is scoped to the whole VS Code workspace, not to one
+  // folder inside a multi-root workspace. Always add the project hash so two
+  // independently compiled src/ trees can never share artifacts.
   const storageBase = workspaceStoragePath
-    ? path.resolve(workspaceStoragePath)
+    ? path.join(path.resolve(workspaceStoragePath), 'projects', workspaceHash)
     : path.join(path.resolve(globalStoragePath), 'workspaces', workspaceHash);
   const root = path.join(storageBase, BUILD_CACHE_SCHEMA);
 
@@ -121,9 +129,34 @@ export function resolveBuildStoragePaths(
 
   return {
     root,
-    build: path.join(root, 'build'),
-    wrappers: path.join(root, 'wrappers')
+    build: location === 'workspace' ? path.join(path.resolve(workspaceRoot), 'mpy') : path.join(root, 'build'),
+    wrappers: path.join(root, 'wrappers'),
+    location,
+    workspaceRoot: path.resolve(workspaceRoot)
   };
+}
+
+/**
+ * Removes every artifact owned by one resolved build cache. Workspace output
+ * is deleted only when the caller explicitly resolved the supported `mpy/`
+ * location; arbitrary paths are rejected.
+ */
+export async function clearBuildStorage(paths: BuildStoragePaths): Promise<void> {
+  const resolvedRoot = path.resolve(paths.root);
+  const resolvedBuild = path.resolve(paths.build);
+  const expectedBuild = paths.location === 'workspace'
+    ? path.join(path.resolve(paths.workspaceRoot), 'mpy')
+    : path.join(resolvedRoot, 'build');
+  if (normalizedPathKey(resolvedBuild) !== normalizedPathKey(expectedBuild)) {
+    throw new Error(`Refusing to clear an unsafe MPyTools build path: ${resolvedBuild}`);
+  }
+
+  // In extension-storage mode the build directory is already contained by
+  // root. In workspace mode it is a separate, explicitly selected mpy/ folder.
+  await fs.promises.rm(resolvedRoot, { recursive: true, force: true });
+  if (paths.location === 'workspace') {
+    await fs.promises.rm(resolvedBuild, { recursive: true, force: true });
+  }
 }
 
 export function normalizeAssetExtensions(extensions: readonly string[]): Set<string> {

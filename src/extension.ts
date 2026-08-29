@@ -14,6 +14,13 @@ import { MpremoteService } from './mpremoteService';
 import { DeviceSession } from './deviceSession';
 import { describePort, SerialPortDescriptor } from './ports';
 import { decodeMpyAbi } from './micropythonInfo';
+import {
+  BuildOutputLocation,
+  BuildStoragePaths,
+  clearBuildStorage,
+  resolveBuildStoragePaths
+} from './buildWorkspace';
+import { resolveWorkspaceProjectFolder } from './workspaceProject';
 
 // Вікно логу
 export const mpyOutputChannel = new BufferedOutputChannel(
@@ -42,6 +49,39 @@ export function activate(context: vscode.ExtensionContext): void {
   const compileMethodSettingKey = 'mpytools.compileMethod';
   const wrapNonPySettingKey = 'mpytools.wrapNonPyFiles';
   const compileSettingsDirtyKey = 'mpytools.compileSettingsDirty';
+
+  const buildStorageForFolder = (folder: vscode.WorkspaceFolder): BuildStoragePaths => {
+    const location = vscode.workspace
+      .getConfiguration('mpytools', folder.uri)
+      .get<BuildOutputLocation>('buildOutputLocation', 'extensionStorage');
+    return resolveBuildStoragePaths(
+      folder.uri.fsPath,
+      context.storageUri?.fsPath,
+      context.globalStorageUri.fsPath,
+      location
+    );
+  };
+
+  const resolveProjectBuildStorage = async (
+    placeHolder: string
+  ): Promise<{ folder: vscode.WorkspaceFolder; storage: BuildStoragePaths } | undefined> => {
+    const folder = await resolveWorkspaceProjectFolder(placeHolder);
+    if (!folder) {
+      vscode.window.showWarningMessage('No MPyTools project workspace selected.');
+      return undefined;
+    }
+    return { folder, storage: buildStorageForFolder(folder) };
+  };
+
+  const unambiguousProjectFolder = (): vscode.WorkspaceFolder | undefined => {
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const activeFolder = activeUri ? vscode.workspace.getWorkspaceFolder(activeUri) : undefined;
+    if (activeFolder) {
+      return activeFolder;
+    }
+    const folders = vscode.workspace.workspaceFolders;
+    return folders?.length === 1 ? folders[0] : undefined;
+  };
 
   const toolchain = new ToolchainManager(context, mpyOutputChannel);
   const mpremote = new MpremoteService(toolchain, (line) => mpyOutputChannel.appendLine(line));
@@ -136,6 +176,9 @@ export function activate(context: vscode.ExtensionContext): void {
       { label: 'Compile non-.py files (ON/OFF)', description: `Current: ${wrapEnabled === false ? 'OFF' : 'ON'}` },
       { label: 'Install Toolchain', description: 'Install isolated mpremote and mpy-cross' },
       { label: 'Install Stubs', description: 'Install project-local MicroPython stubs' },
+      { label: 'Build Folder Location', description: 'Choose visible workspace mpy/ or protected extension storage' },
+      { label: 'Open Build Folder', description: 'Open the current generated upload folder' },
+      { label: 'Clear Build Cache', description: 'Delete generated build files safely' },
       { label: 'Diagnostics', description: 'Inspect toolchain, serial ports and device access' }
     ];
     const selected = await vscode.window.showQuickPick(options, { placeHolder: 'Select an option' });
@@ -150,9 +193,101 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand('mpytools.installDependencies');
     } else if (selected.label === 'Install Stubs') {
       vscode.commands.executeCommand('mpytools.installStubs');
+    } else if (selected.label === 'Build Folder Location') {
+      vscode.commands.executeCommand('mpytools.selectBuildOutputLocation');
+    } else if (selected.label === 'Open Build Folder') {
+      vscode.commands.executeCommand('mpytools.openBuildOutput');
+    } else if (selected.label === 'Clear Build Cache') {
+      vscode.commands.executeCommand('mpytools.clearBuildCache');
     } else if (selected.label === 'Diagnostics') {
       vscode.commands.executeCommand('mpytools.diagnostics');
     }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.selectBuildOutputLocation', async (): Promise<void> => {
+    const resolved = await resolveProjectBuildStorage('Select the project whose MPyTools build folder should change');
+    if (!resolved) {
+      return;
+    }
+    interface BuildLocationPick extends vscode.QuickPickItem {
+      value: BuildOutputLocation;
+    }
+    const currentLocation = resolved.storage.location;
+    const selected = await vscode.window.showQuickPick<BuildLocationPick>([
+      {
+        label: 'Visible workspace mpy/ folder',
+        description: currentLocation === 'workspace' ? 'Current' : 'Easy to inspect and delete manually',
+        detail: 'MPyTools owns <project>/mpy and removes stale files from it before upload.',
+        value: 'workspace'
+      },
+      {
+        label: 'Protected extension storage',
+        description: currentLocation === 'extensionStorage' ? 'Current' : 'Reduces workspace file watching',
+        detail: 'Generated files stay outside the project but can be opened with MPY: Open Build Folder.',
+        value: 'extensionStorage'
+      }
+    ], { placeHolder: 'Choose where MPyTools stores generated upload files' });
+    if (!selected || selected.value === currentLocation) {
+      return;
+    }
+
+    if (selected.value === 'workspace') {
+      const confirmation = await vscode.window.showWarningMessage(
+        `MPyTools will own and may fully delete ${path.join(resolved.folder.uri.fsPath, 'mpy')}. Continue?`,
+        { modal: true },
+        'Use workspace mpy/'
+      );
+      if (confirmation !== 'Use workspace mpy/') {
+        return;
+      }
+    }
+
+    const destination = resolveBuildStoragePaths(
+      resolved.folder.uri.fsPath,
+      context.storageUri?.fsPath,
+      context.globalStorageUri.fsPath,
+      selected.value
+    );
+    await clearBuildStorage(resolved.storage);
+    await clearBuildStorage(destination);
+    await vscode.workspace
+      .getConfiguration('mpytools', resolved.folder.uri)
+      .update('buildOutputLocation', selected.value, vscode.ConfigurationTarget.WorkspaceFolder);
+    await fs.promises.mkdir(destination.build, { recursive: true });
+    mpyOutputChannel.appendLine(`✅ Build output location: ${destination.build}`);
+    vscode.window.showInformationMessage(
+      selected.value === 'workspace'
+        ? 'MPyTools will now build into the visible project mpy/ folder.'
+        : 'MPyTools will now build in protected VS Code extension storage.'
+    );
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.openBuildOutput', async (): Promise<void> => {
+    const resolved = await resolveProjectBuildStorage('Select the project whose MPyTools build folder should open');
+    if (!resolved) {
+      return;
+    }
+    await fs.promises.mkdir(resolved.storage.build, { recursive: true });
+    mpyOutputChannel.appendLine(`📂 Build output: ${resolved.storage.build}`);
+    await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(resolved.storage.build));
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('mpytools.clearBuildCache', async (): Promise<void> => {
+    const resolved = await resolveProjectBuildStorage('Select the project whose MPyTools build cache should be cleared');
+    if (!resolved) {
+      return;
+    }
+    const confirmation = await vscode.window.showWarningMessage(
+      `Delete MPyTools generated files for ${resolved.folder.name}?\n${resolved.storage.build}`,
+      { modal: true },
+      'Clear Build Cache'
+    );
+    if (confirmation !== 'Clear Build Cache') {
+      return;
+    }
+    await clearBuildStorage(resolved.storage);
+    mpyOutputChannel.appendLine(`🗑 Cleared build cache: ${resolved.storage.build}`);
+    vscode.window.showInformationMessage('MPyTools build cache cleared. The next build will recreate it.');
   }));
 
   // Реєструємо команду "mpytools.selectCompilationMethod"
@@ -309,6 +444,18 @@ export function activate(context: vscode.ExtensionContext): void {
         mpyOutputChannel.show(true);
         mpyOutputChannel.appendLine('⚙️ Fetching device info (version, architecture, small-int bits)...');
         await fetchMicropythonVersionInfo(deviceSession);
+        const projectFolder = unambiguousProjectFolder();
+        if (projectFolder) {
+          try {
+            const storage = buildStorageForFolder(projectFolder);
+            await clearBuildStorage(storage);
+            mpyOutputChannel.appendLine(`🗑 Reset build cache after port selection: ${storage.build}`);
+          } catch (error: any) {
+            mpyOutputChannel.appendLine(`⚠️ Could not reset build cache: ${error.message ?? error}`);
+          }
+        } else {
+          mpyOutputChannel.appendLine('ℹ️ Build cache will reset when a project is selected for Compile & Run.');
+        }
         await vscode.commands.executeCommand('mpytoolsFileExplorer.refresh');
         mpyOutputChannel.appendLine(`✅ Connected to port: "${lastUsedPort}"`);
         mpyOutputChannel.appendLine("✅ Fetched device info successfully.\n");

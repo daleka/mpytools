@@ -6,6 +6,19 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.8]
+
+- Add a supported visible build-output mode that restores the project-local
+  `mpy/` folder. MPyTools owns and prunes this folder, so it can be inspected,
+  edited, or deleted manually while preserving incremental compilation.
+- Keep protected extension storage as the default for users who want to avoid
+  workspace file watching, and add commands to select, open, or safely clear
+  either build location.
+- Reset an unambiguous project's build cache immediately after port selection,
+  and isolate build metadata per folder in multi-root workspaces.
+- Document differential uploads in the build log: `mpremote` compares hashes
+  and skips files that already match the device.
+
 ## [0.4.7]
 
 - Replace the fixed 120-second project-upload deadline with a bounded dynamic

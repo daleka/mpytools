@@ -94,6 +94,18 @@ Other resources, including binary files, are copied unchanged. Build caches are
 automatically invalidated when the extension version, compiler settings, asset
 settings, or MicroPython ABI changes.
 
+Generated upload files use protected VS Code extension storage by default so
+they do not burden workspace file watching. To restore the classic visible
+`<project>/mpy` workflow, run **MPY: Select Build Folder Location** and choose
+**Visible workspace mpy/ folder**. MPyTools owns that folder and removes stale
+outputs before every upload. **MPY: Open Build Folder** opens either location,
+and **MPY: Clear Build Cache** safely resets it. These choices are stored in the
+workspace configuration and survive extension updates or reinstallation.
+
+Project uploads remain incremental in both modes: unchanged sources are not
+recompiled, and `mpremote` compares hashes so matching files on the device are
+not transferred again.
+
 ---
 
 ## Українською

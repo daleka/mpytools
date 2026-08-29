@@ -8,6 +8,9 @@ import { prepareFirmwareVersion, saveFirmwareSnapshot } from './projectBuild';
 import { DeviceSession } from './deviceSession';
 import {
   assertUniqueOutputPaths,
+  BuildOutputLocation,
+  BuildStoragePaths,
+  clearBuildStorage,
   collectSourceInventory,
   DEFAULT_WRAPPABLE_ASSET_EXTENSIONS,
   ensureParentDirectories,
@@ -177,7 +180,10 @@ export function registerCompileAndRunCommand(
     const buildStorage = resolveBuildStoragePaths(
       workspaceRoot,
       context.storageUri?.fsPath,
-      context.globalStorageUri.fsPath
+      context.globalStorageUri.fsPath,
+      vscode.workspace
+        .getConfiguration('mpytools', workspaceFolder.uri)
+        .get<BuildOutputLocation>('buildOutputLocation', 'extensionStorage')
     );
     const mpyPath = buildStorage.build;
     const wrappersPath = buildStorage.wrappers;
@@ -189,6 +195,7 @@ export function registerCompileAndRunCommand(
       compilationMethod: currentMethod,
       wrapNonPy: shouldWrapNonPy,
       wrappableAssetExtensions: [...normalizeAssetExtensions(configuredAssetExtensions)].sort(),
+      buildOutputLocation: buildStorage.location,
       target: getCompilationTarget()
     };
 
@@ -204,9 +211,13 @@ export function registerCompileAndRunCommand(
     }
 
     const cacheMatchesConfiguration = await isBuildCacheCompatible(buildStorage.root, buildConfiguration);
-    if ((shouldResetMpyFolder || !cacheMatchesConfiguration) && fs.existsSync(buildStorage.root)) {
-      await fs.promises.rm(buildStorage.root, { recursive: true, force: true });
-      logBuildLine("🗑 Cleared incompatible MPyTools build cache.");
+    if (shouldResetMpyFolder || !cacheMatchesConfiguration) {
+      await clearBuildStorage(buildStorage);
+      logBuildLine(
+        shouldResetMpyFolder
+          ? '🗑 Cleared MPyTools build cache after device/settings selection.'
+          : '🗑 Cleared MPyTools build cache because its configuration or device ABI changed.'
+      );
     }
     await fs.promises.mkdir(buildStorage.root, { recursive: true });
     await writeBuildCacheManifest(buildStorage.root, buildConfiguration);
@@ -217,7 +228,12 @@ export function registerCompileAndRunCommand(
     logBuildLine("🔹 Starting Compile & Run...");
     logBuildLine(`   - Selected method: ${currentMethod === 'none' ? 'No Compilation' : 'Optimization O' + currentMethod}`);
     logBuildLine(`   - Non-.py mode: ${shouldWrapNonPy ? 'Wrap into .py' : 'Keep as-is'}`);
-    logBuildLine(`   - Build cache: ${buildStorage.root} (outside workspace)`);
+    logBuildLine(`   - Build output: ${buildStorage.build}`);
+    logBuildLine(
+      buildStorage.location === 'workspace'
+        ? '   - Build mode: visible workspace mpy/ (MPyTools owns and prunes this folder)'
+        : '   - Build mode: protected VS Code extension storage'
+    );
 
     // Нова зміна: змінюємо стан кнопки на активний – червоний із спінером
     compileStatusBarItem.text = '$(sync~spin)Compile&Run';
@@ -463,8 +479,8 @@ export function registerCompileAndRunCommand(
         }
       }
 
-      await pruneOwnedDirectory(buildStorage.root, mpyPath, expectedBuildFiles);
-      await pruneOwnedDirectory(buildStorage.root, wrappersPath, expectedWrapperFiles);
+      await pruneOwnedDirectory(buildStorage, mpyPath, expectedBuildFiles);
+      await pruneOwnedDirectory(buildStorage, wrappersPath, expectedWrapperFiles);
 
       // 2.6 Копіюємо файли на пристрій
       let copyPath: string;
@@ -474,6 +490,7 @@ export function registerCompileAndRunCommand(
       const uploadTimeoutMs = estimateUploadTimeoutMs(transferStats.totalBytes, transferStats.fileCount);
 
       logBuildLine("🔹 Copying files to device...");
+      logBuildLine('   - Differential upload: unchanged device files are skipped by hash.');
       logBuildLine(
         `   - Payload: ${(transferStats.totalBytes / 1024).toFixed(2)} KB in ${transferStats.fileCount} files`
       );
@@ -671,15 +688,14 @@ function getAssetWrapperPyPath(filePath: string, srcPath: string, wrappersPath: 
 
 /** Remove stale files, but only inside MPyTools' explicitly owned cache directories. */
 async function pruneOwnedDirectory(
-  ownedStorageRoot: string,
+  buildStorage: BuildStoragePaths,
   directoryRoot: string,
   expectedFiles: Set<string>
 ): Promise<void> {
-  const resolvedOwnedRoot = path.resolve(ownedStorageRoot);
   const resolvedRoot = path.resolve(directoryRoot);
   const allowedRoots = new Set([
-    path.join(resolvedOwnedRoot, 'build'),
-    path.join(resolvedOwnedRoot, 'wrappers')
+    path.resolve(buildStorage.build),
+    path.resolve(buildStorage.wrappers)
   ]);
   if (!allowedRoots.has(resolvedRoot)) {
     throw new Error(`Refusing to prune a non-MPyTools cache directory: ${resolvedRoot}`);

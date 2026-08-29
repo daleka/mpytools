@@ -2,7 +2,7 @@
   "name": "mpytools",
   "displayName": "MPyTools",
   "description": "MPyTools – просте та гнучке розширення для роботи з MicroPython у VS Code. | MPyTools – a simple and flexible extension for working with MicroPython in VS Code.",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "preview": true,
   "publisher": "daleka",
   "repository": {
@@ -70,6 +70,18 @@
       {
         "command": "mpytools.openSettings",
         "title": "MPY: Settings / Налаштування"
+      },
+      {
+        "command": "mpytools.selectBuildOutputLocation",
+        "title": "MPY: Select Build Folder Location / Обрати розташування папки збірки"
+      },
+      {
+        "command": "mpytools.openBuildOutput",
+        "title": "MPY: Open Build Folder / Відкрити папку збірки"
+      },
+      {
+        "command": "mpytools.clearBuildCache",
+        "title": "MPY: Clear Build Cache / Очистити кеш збірки"
       },
       {
         "command": "mpytoolsFileExplorer.refreshFolder",
@@ -146,6 +158,20 @@
           ],
           "scope": "resource",
           "description": "File extensions that MPyTools may wrap into importable Python modules when non-.py compilation is enabled. Other assets are copied unchanged. Generated Python caches are always ignored."
+        },
+        "mpytools.buildOutputLocation": {
+          "type": "string",
+          "enum": [
+            "extensionStorage",
+            "workspace"
+          ],
+          "enumDescriptions": [
+            "Keep generated files in protected VS Code extension storage. Use MPY: Open Build Folder to inspect them.",
+            "Use a visible <project>/mpy folder owned and pruned by MPyTools."
+          ],
+          "default": "extensionStorage",
+          "scope": "resource",
+          "description": "Where MPyTools stores the generated folder uploaded to the device. Workspace mode restores the visible mpy/ workflow; extension storage reduces VS Code file watching."
         }
       }
     },
